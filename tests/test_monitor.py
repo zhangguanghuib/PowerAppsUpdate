@@ -55,6 +55,46 @@ def test_actual_learn_sibling_content_containers() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("metadata", "expected_title"),
+    [
+        ('<meta property="og:title" content="Media guidance">', "Media guidance"),
+        ("<title>Media guidance | Microsoft Learn</title>", "Media guidance"),
+        ("<title> | Microsoft Learn</title>", "readme"),
+    ],
+)
+def test_headingless_published_page_keeps_body_and_logs_title_fallback(
+    metadata: str,
+    expected_title: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    url = monitor.ROOTS[0] + "media/shared/readme"
+    html = (
+        f"<html><head>{metadata}</head><body><main>"
+        '<div class="content"><p>This folder contains media files that are used '
+        "in include files across product documentation articles.</p></div>"
+        "</main></body></html>"
+    )
+    parsed = parse_article(url, html, "2026-10-25")
+    assert parsed.title == expected_title
+    assert "This folder contains media files" in parsed.text
+    assert parsed.modified == "2026-10-25"
+    assert url in caplog.text
+    assert "heading" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<div>No main article container.</div>",
+        '<main><div class="content"><p>Empty</p></div></main>',
+    ],
+)
+def test_missing_heading_does_not_hide_missing_or_empty_body(body: str) -> None:
+    with pytest.raises(ValueError):
+        parse_article(URL, f"<html><head><title>Fallback</title></head>{body}</html>", "")
+
+
 def test_code_indentation_change_is_observed() -> None:
     before = parse_article(URL, HTML, "")
     after = parse_article(URL, HTML.replace("    print", "        print"), "")

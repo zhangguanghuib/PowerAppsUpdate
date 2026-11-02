@@ -129,9 +129,19 @@ def parse_article(url: str, html: str, lastmod: str) -> Article:
     soup = BeautifulSoup(html, "html.parser")
     heading = soup.find("h1")
     main = soup.select_one("main")
-    if main is None or heading is None:
-        raise ValueError(f"No article body/title found: {url}")
-    title = heading.get_text(" ", strip=True)
+    if main is None:
+        raise ValueError(f"No article body found: {url}")
+    title = heading.get_text(" ", strip=True) if heading else ""
+    if not title:
+        metadata_title = soup.find("meta", attrs={"property": "og:title"})
+        page_title = soup.title.get_text(" ", strip=True) if soup.title else ""
+        candidates = [
+            str(metadata_title.get("content", "")).strip() if metadata_title else "",
+            re.sub(r"\s*\|\s*Microsoft Learn\s*$", "", page_title).strip(),
+            urlsplit(url).path.rstrip("/").rsplit("/", 1)[-1],
+        ]
+        title = next(candidate for candidate in candidates if candidate)
+        LOG.warning("No article heading found: %s; using fallback title %r", url, title)
     containers = main.select(".content")
     # Learn renders the title and article in separate .content siblings.
     body = (

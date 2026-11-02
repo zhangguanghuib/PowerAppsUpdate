@@ -1,0 +1,84 @@
+name: Power Apps documentation monitor
+
+on:
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: powerapps-documentation-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.9"
+          python-version: "3.12"
+      - run: uv sync --locked --no-dev
+      - name: Load persistent snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir state-store
+          git -C state-store init -b monitor-state
+          git -C state-store remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -C state-store config http.https://github.com/.extraheader "AUTHORIZATION: basic $AUTH"
+          git -C state-store config user.name "github-actions[bot]"
+          git -C state-store config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          status=0
+          git -C state-store ls-remote --exit-code origin refs/heads/monitor-state > /dev/null || status=$?
+          if [ "$status" -eq 0 ]; then
+            git -C state-store fetch --depth=1 origin monitor-state
+            git -C state-store checkout -B monitor-state FETCH_HEAD
+            test -s state-store/snapshot.json.gz
+          elif [ "$status" -ne 2 ]; then
+            echo "::error::Could not determine whether the state branch exists."
+            exit "$status"
+          fi
+      - name: Scan and generate PDF
+        id: scan
+        run: uv run --no-sync python monitor.py
+      - name: Archive PDF permanently as a release asset
+        if: steps.scan.outputs.changed == 'true'
+        env:
+          TAG: ${{ steps.scan.outputs.tag }}
+          PDF: ${{ steps.scan.outputs.pdf }}
+          COUNT: ${{ steps.scan.outputs.count }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --target "$GITHUB_SHA" \
+              --title "Power Apps documentation: $COUNT changes" \
+              --notes "English documentation body changes, not necessarily feature releases. See the PDF for sources and historical coverage limitations."
+          fi
+          gh release upload "$TAG" "$PDF" --clobber
+      - name: Commit snapshot only after report archival succeeds
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp output/pdf/next-snapshot.json.gz state-store/snapshot.json.gz
+          git -C state-store add snapshot.json.gz
+          git -C state-store commit -m "Update documentation snapshot [skip ci]"
+          git -C state-store push origin HEAD:refs/heads/monitor-state
+      - name: Keep diagnostic outputs for 30 days
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            output/pdf/*.pdf
+            output/pdf/manifest.json
+          retention-days: 30
+          if-no-files-found: ignore

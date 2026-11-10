@@ -1,7 +1,7 @@
 [project]
-name = "powerapps-update-monitor"
+name = "copilot-studio-update-monitor"
 version = "0.1.0"
-description = "Daily Microsoft Learn Power Apps documentation change reports."
+description = "Configurable Microsoft Learn Copilot Studio documentation update digests."
 requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.13,<5",

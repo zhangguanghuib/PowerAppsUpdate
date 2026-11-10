@@ -1,15 +1,21 @@
-name: Power Apps documentation monitor
+name: Copilot Studio documentation monitor
 
 on:
   schedule:
     - cron: "0 1 * * *"
   workflow_dispatch:
+    inputs:
+      days:
+        description: "Number of days to look back (positive integer)"
+        required: true
+        default: "7"
+        type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: powerapps-documentation-monitor
+  group: copilot-studio-documentation-monitor
   cancel-in-progress: false
 
 jobs:
@@ -19,38 +25,40 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Require a branch for report commits
+        shell: bash
+        run: |
+          test "$GITHUB_REF_TYPE" = branch || { echo "::error::Run this workflow on a branch."; exit 1; }
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.9.9"
           python-version: "3.12"
       - run: uv sync --locked --no-dev
-      - name: Load persistent snapshot
+      - name: Scan and generate PDF
+        id: scan
+        env:
+          DAYS: ${{ inputs.days || '7' }}
         shell: bash
         run: |
           set -euo pipefail
-          mkdir state-store
-          git -C state-store init -b monitor-state
-          git -C state-store remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
-          git -C state-store config http.https://github.com/.extraheader "AUTHORIZATION: basic $AUTH"
-          git -C state-store config user.name "github-actions[bot]"
-          git -C state-store config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          status=0
-          git -C state-store ls-remote --exit-code origin refs/heads/monitor-state > /dev/null || status=$?
-          if [ "$status" -eq 0 ]; then
-            git -C state-store fetch --depth=1 origin monitor-state
-            git -C state-store checkout -B monitor-state FETCH_HEAD
-            test -s state-store/snapshot.json.gz
-          elif [ "$status" -ne 2 ]; then
-            echo "::error::Could not determine whether the state branch exists."
-            exit "$status"
-          fi
-      - name: Scan and generate PDF
-        id: scan
-        run: uv run --no-sync python monitor.py
+          uv run --no-sync python monitor.py --days "$DAYS"
+      - name: Commit PDF to the selected repository branch
+        env:
+          PDF: ${{ steps.scan.outputs.pdf }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "$PDF"
+          git commit -m "Archive Copilot Studio documentation digest [skip ci]" \
+            -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push origin "HEAD:refs/heads/$GITHUB_REF_NAME"
       - name: Archive PDF permanently as a release asset
-        if: steps.scan.outputs.changed == 'true'
         env:
           TAG: ${{ steps.scan.outputs.tag }}
           PDF: ${{ steps.scan.outputs.pdf }}
@@ -59,19 +67,11 @@ jobs:
         run: |
           set -euo pipefail
           if ! gh release view "$TAG" > /dev/null 2>&1; then
-            gh release create "$TAG" --target "$GITHUB_SHA" \
-              --title "Power Apps documentation: $COUNT changes" \
-              --notes "English documentation body changes, not necessarily feature releases. See the PDF for sources and historical coverage limitations."
+            gh release create "$TAG" --target "$(git rev-parse HEAD)" \
+              --title "Copilot Studio documentation: $COUNT documents" \
+              --notes "Links and short evidence-based summaries for the requested window. Modification dates are not feature releases. See the PDF for history limitations."
           fi
           gh release upload "$TAG" "$PDF" --clobber
-      - name: Commit snapshot only after report archival succeeds
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp output/pdf/next-snapshot.json.gz state-store/snapshot.json.gz
-          git -C state-store add snapshot.json.gz
-          git -C state-store commit -m "Update documentation snapshot [skip ci]"
-          git -C state-store push origin HEAD:refs/heads/monitor-state
       - name: Keep diagnostic outputs for 30 days
         if: always()
         uses: actions/upload-artifact@v4

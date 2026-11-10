@@ -18,7 +18,7 @@ from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import (
     Flowable,
     HRFlowable,
-    PageBreak,
+    KeepTogether,
     Paragraph,
     SimpleDocTemplate,
     Spacer,
@@ -61,6 +61,56 @@ def changed_blocks(before: str, after: str) -> list[tuple[str, str, str]]:
     ]
 
 
+def excerpt(text: str, *, limit: int = 320) -> str:
+    lines = []
+    in_code = False
+    for line in text.splitlines():
+        if line.strip().startswith(("```", "[Code]", "[/Code]")):
+            in_code = not in_code
+            continue
+        if in_code or line.lstrip().startswith(("[Image:", "<", "[!", ":::")):
+            continue
+        if line.strip() in {"Note", "Important", "Tip", "In this article"}:
+            continue
+        if line.startswith("This article describes features used in agents or agent flows"):
+            continue
+        line = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", line)
+        line = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", line)
+        line = re.sub(r"\s*\(https?://[^)\s]+\)", "", line)
+        line = re.sub(r"https?://\S+", "", line)
+        line = re.sub(r"^[#>*\s-]+", "", line).strip("` |")
+        if line:
+            lines.append(line)
+    text = re.sub(r"\s+", " ", " ".join(lines)).strip()
+    if len(text) > limit:
+        return text[:limit].rsplit(" ", 1)[0] + "..."
+    return text
+
+
+def summarize(change: Change) -> str:
+    if change.kind != "Historical source comparison":
+        overview = excerpt("\n".join(change.after.splitlines()[1:])) or excerpt(change.after)
+        return (
+            "Current article overview (not a change claim; history unavailable or disabled): "
+            f"{overview or 'See the linked article.'}"
+        )
+    blocks = changed_blocks(change.before, change.after)
+    if not blocks:
+        return (
+            "The modification timestamp is in range, but no public source-body changes were "
+            "found. The update may be metadata-only or differ from public source publication."
+        )
+    added = "\n".join(after for _, _, after in blocks if after)
+    removed = "\n".join(before for _, before, _ in blocks if before)
+    parts = [f"Public source comparison: {len(blocks)} changed block(s)."]
+    if added:
+        parts.append(f"Added/updated excerpt: {excerpt(added) or 'Non-prose source changes.'}")
+    if removed:
+        parts.append(f"Removed/replaced excerpt: {excerpt(removed) or 'Non-prose source changes.'}")
+    parts.append("Representative excerpts only; source changes may differ from the live page.")
+    return " ".join(parts)
+
+
 def generate_pdf(
     changes: list[Change],
     destination: Path,
@@ -68,7 +118,7 @@ def generate_pdf(
     now: datetime,
     since: str,
     articles: dict[str, Article],
-    initial: bool,
+    partial: bool = False,
 ) -> None:
     font = register_font()
     styles = getSampleStyleSheet()
@@ -101,37 +151,31 @@ def generate_pdf(
             value = "&#160;" * indent + value[indent:]
         story.append(Paragraph(value, style))
 
-    def block(label: str, content: str, color: str) -> None:
-        paragraph(label, heading)
-        story.append(HRFlowable(width="100%", color=colors.HexColor(color)))
-        # Separate paragraphs allow page splitting even for very long articles and source lines.
-        for line in content.splitlines():
-            paragraph(line or " ", small)
-
-    paragraph("POWER APPS", styles["Title"])
-    paragraph("Documentation change report", styles["Heading1"])
+    paragraph("MICROSOFT COPILOT STUDIO", styles["Title"])
+    paragraph("Documentation update digest", styles["Heading1"])
     paragraph(f"Generated (UTC): {now.isoformat()}")
     paragraph(f"Observation window: {since} to {now.isoformat()}")
-    paragraph(
-        f"{len(changes)} entries | {'Initial 30-day review' if initial else 'Snapshot comparison'}"
-    )
+    paragraph(f"{len(changes)} new or updated document candidates")
+    if partial:
+        paragraph("PARTIAL SMOKE TEST - not a complete directory report", heading)
     story.append(Spacer(1, 6 * mm))
     paragraph(
-        "Scope: English Microsoft Learn Power Apps documentation and Power Apps troubleshooting. "
+        "Scope: English Microsoft Learn Copilot Studio documentation and troubleshooting. "
         "Documentation changes are not necessarily new product features. Modification timestamps "
         "are not feature release dates. No AI interpretation is used."
     )
     paragraph(
-        "Initial reports select candidates using published modification timestamps. Public source "
-        "history is auxiliary and can lag or differ from publication; "
-        "incomplete history is labeled. "
-        "Later reports compare fetched, normalized published text, links and image references."
+        "Every run independently selects articles using their published updated_at timestamp "
+        "(sitemap lastmod when absent), within the inclusive UTC window above. "
+        "New and updated articles are combined: a recent modification date alone does not prove "
+        "that an article is newly created. Summaries use representative public source changes "
+        "since the window start, not AI interpretation. If history is unavailable, an overview "
+        "of the current article is explicitly labeled instead of claiming unverified changes."
     )
     paragraph(
         "Attribution: Microsoft and Microsoft Learn contributors. Source text is reproduced or "
-        "reformatted for comparison; links identify each original. Public documentation sources: "
-        "https://github.com/MicrosoftDocs/powerapps-docs and "
-        "https://github.com/MicrosoftDocs/SupportArticles-docs . "
+        "reformatted into short extracts; links identify each original. "
+        "Public GitHub source history is used only when accessible. "
         "Documentation text licensed under CC BY 4.0: "
         "https://creativecommons.org/licenses/by/4.0/ . "
         "Third-party materials may have separate terms. No images are reproduced.",
@@ -139,17 +183,22 @@ def generate_pdf(
     )
     paragraph(
         "Text formatting: unsupported font glyphs are represented as [U+XXXX] to preserve their "
-        "identity. Image references are monitored, not image binary contents. This report does not "
+        "identity. Images are not reproduced. This report does not "
         "claim to capture every intermediate edit between scans.",
         small,
     )
-    paragraph("Contents", heading)
+    if not changes:
+        paragraph("No new or updated documents found in this time window.", heading)
     for index, change in enumerate(changes, 1):
-        paragraph(f"{index}. {change.title} - {change.kind}", small)
-    for index, change in enumerate(changes, 1):
-        story.append(PageBreak())
+        start = len(story)
+        story.append(Spacer(1, 4 * mm))
+        story.append(HRFlowable(width="100%", color=colors.HexColor("#D7E1E5")))
         paragraph(f"{index}. {change.title}", heading)
-        paragraph(change.kind)
+        paragraph(f"Updated (UTC): {articles[change.url].modified}", small)
+        paragraph(
+            "Troubleshooting" if "/troubleshoot/" in change.url else "Official documentation",
+            small,
+        )
         story.append(
             Paragraph(
                 f'<link href="{escape(change.url, {chr(34): "&quot;"})}" color="#126782">'
@@ -157,27 +206,17 @@ def generate_pdf(
                 small,
             )
         )
-        paragraph(change.evidence, small)
-        blocks = changed_blocks(change.before, change.after)
-        if not blocks:
-            paragraph("No normalized source-body difference found.")
-        for number, (kind, before, after) in enumerate(blocks, 1):
-            paragraph(f"Change block {number}: {kind}", heading)
-            if before:
-                block("Before / removed", before, "#B54747")
-            if after:
-                block("After / added", after, "#2B7D62")
+        paragraph(summarize(change))
         if change.kind == "Historical source comparison":
-            block(
-                "Current published article (not historical)", articles[change.url].text, "#126782"
-            )
+            paragraph(f"Evidence: {change.evidence}", small)
+        story[start:] = [KeepTogether(story[start:])]
 
     def footer(canvas: Canvas, document: SimpleDocTemplate) -> None:
         canvas.saveState()
         canvas.setStrokeColor(colors.HexColor("#D7E1E5"))
         canvas.line(18 * mm, 17 * mm, 192 * mm, 17 * mm)
         canvas.setFont(font, 8)
-        canvas.drawString(18 * mm, 12 * mm, "Power Apps | Microsoft Learn change monitor")
+        canvas.drawString(18 * mm, 12 * mm, "Copilot Studio | Microsoft Learn update digest")
         canvas.drawRightString(192 * mm, 12 * mm, f"Page {document.page}")
         canvas.restoreState()
 
@@ -189,7 +228,7 @@ def generate_pdf(
         rightMargin=18 * mm,
         topMargin=18 * mm,
         bottomMargin=23 * mm,
-        title="Power Apps documentation changes",
-        author="Power Apps documentation monitor",
+        title="Copilot Studio documentation updates",
+        author="Copilot Studio documentation monitor",
     )
     document.build(story, onFirstPage=footer, onLaterPages=footer)

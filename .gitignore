@@ -2,8 +2,10 @@
 __pycache__/
 .pytest_cache/
 .ruff_cache/
-output/
+output/*
+!output/pdf/
+output/pdf/*
+!output/pdf/copilot-studio-updates-*.pdf
 tmp/
-state-store/
 *.egg-info/
 .env

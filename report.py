@@ -90,6 +90,11 @@ def excerpt(text: str, *, limit: int = 320) -> str:
 def summarize(change: Change) -> str:
     if change.kind != "Historical source comparison":
         overview = excerpt("\n".join(change.after.splitlines()[1:])) or excerpt(change.after)
+        if change.kind == "New source document":
+            return (
+                "Current article overview (new public source file; publication date unverified): "
+                f"{overview or 'See the linked article.'}"
+            )
         return (
             "Current article overview (not a change claim; history unavailable or disabled): "
             f"{overview or 'See the linked article.'}"
@@ -168,8 +173,11 @@ def generate_pdf(
     paragraph(
         "Every run independently selects articles using their published updated_at timestamp "
         "(sitemap lastmod when absent), within the inclusive UTC window above. "
-        "New and updated articles are combined: a recent modification date alone does not prove "
-        "that an article is newly created. Summaries use representative public source changes "
+        "Documents are grouped by public GitHub source history: newly created source files first, "
+        "updated documents second, and unclassified documents last. A source-file addition "
+        "does not prove a new website publication; repository imports or copies may look new. "
+        "Unavailable history is not treated as proof of creation. "
+        "Summaries use representative public source changes "
         "since the window start, not AI interpretation. If history is unavailable, an overview "
         "of the current article is explicitly labeled instead of claiming unverified changes."
     )
@@ -190,8 +198,18 @@ def generate_pdf(
     )
     if not changes:
         paragraph("No new or updated documents found in this time window.", heading)
-    for index, change in enumerate(changes, 1):
+    ordered_changes = [
+        change
+        for category in ("Newly created", "Updated", "Unclassified")
+        for change in changes
+        if change.category == category
+    ]
+    previous_category = ""
+    for index, change in enumerate(ordered_changes, 1):
         start = len(story)
+        if change.category != previous_category:
+            paragraph(f"{change.category} documents", styles["Heading1"])
+            previous_category = change.category
         story.append(Spacer(1, 4 * mm))
         story.append(HRFlowable(width="100%", color=colors.HexColor("#D7E1E5")))
         paragraph(f"{index}. {change.title}", heading)
@@ -208,7 +226,7 @@ def generate_pdf(
             )
         )
         paragraph(summarize(change))
-        if change.kind == "Historical source comparison":
+        if change.kind in {"Historical source comparison", "New source document"}:
             paragraph(f"Evidence: {change.evidence}", small)
         story[start:] = [KeepTogether(story[start:])]
 

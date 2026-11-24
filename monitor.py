@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote, unquote, urljoin, urlsplit, urlunsplit
 
 import requests
@@ -52,6 +52,7 @@ class Change:
     before: str
     after: str
     evidence: str
+    category: Literal["Newly created", "Updated", "Unclassified"] = "Unclassified"
 
 
 def session() -> requests.Session:
@@ -277,6 +278,58 @@ def source_body(text: str) -> str:
     return "\n".join(line.rstrip() for line in text.splitlines()).strip()
 
 
+def source_history(url: str) -> requests.Response | None:
+    try:
+        return get(url, github=True)
+    except requests.HTTPError as error:
+        if error.response is None or error.response.status_code not in (404, 409):
+            raise
+        LOG.warning("No accessible public source history: %s", url)
+        return None
+
+
+def creation_evidence(
+    repo: str,
+    path: str,
+    current: requests.Response,
+    cutoff: datetime,
+    until: datetime,
+) -> str | None:
+    oldest_url = current.links.get("last", {}).get("url")
+    oldest = source_history(oldest_url) if oldest_url else current
+    if oldest is None:
+        return None
+    commits = oldest.json()
+    if not commits:
+        LOG.warning("No first source commit available: %s/%s", repo, path)
+        return None
+    commit = commits[0]
+    created = date_value(commit["commit"]["committer"]["date"])
+    if created is None or not cutoff <= created <= until:
+        LOG.warning("First source commit is outside the observation window: %s/%s", repo, path)
+        return None
+    commit_url = f"https://api.github.com/repos/{repo}/commits/{commit['sha']}?per_page=100"
+    while commit_url:
+        response = source_history(commit_url)
+        if response is None:
+            return None
+        for file in response.json()["files"]:
+            if file["filename"] != path:
+                continue
+            if file["status"] != "added":
+                LOG.info("First source commit does not establish a new document: %s/%s", repo, path)
+                return None
+            return (
+                f"First public source-path commit adds this file at {created.isoformat()}: "
+                f"https://github.com/{repo}/commit/{commit['sha']} . "
+                "This establishes a new public source file, not its website publication date. "
+                "Repository imports or copies can appear as additions of existing documentation."
+            )
+        commit_url = response.links.get("next", {}).get("url", "")
+    LOG.warning("Source file not found in first commit details: %s/%s", repo, path)
+    return None
+
+
 def historical_change(
     article: Article, cutoff: datetime, *, until: datetime | None = None
 ) -> Change:
@@ -285,48 +338,45 @@ def historical_change(
         "selected by a documentation modification timestamp, not a feature release date. "
         "No historical published-body difference is asserted."
     )
+    unclassified = Change(
+        article.title, article.url, "Historical candidate", "", article.text, unavailable
+    )
     location = source_location(article)
     if location is None:
-        return Change(
-            article.title, article.url, "Historical candidate", "", article.text, unavailable
-        )
+        return unclassified
     repo, path = location
-    cutoff_value = cutoff.isoformat().replace("+00:00", "Z")
-    until_value = (until or datetime.now(UTC)).isoformat().replace("+00:00", "Z")
+    cutoff_value = (cutoff - timedelta(microseconds=1)).isoformat().replace("+00:00", "Z")
+    end = until or datetime.now(UTC)
+    until_value = end.isoformat().replace("+00:00", "Z")
     endpoint = (
         f"https://api.github.com/repos/{repo}/commits?"
         f"path={quote(path, safe='')}&until={quote(cutoff_value, safe='')}&per_page=1"
     )
-    response = session().get(
-        endpoint,
-        headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}"}
-        if os.environ.get("GH_TOKEN")
-        else {},
-        timeout=(15, 90),
-    )
-    if response.status_code in (404, 409):
-        LOG.warning("No accessible public source history for %s", article.url)
-        return Change(
-            article.title, article.url, "Historical candidate", "", article.text, unavailable
-        )
-    response.raise_for_status()
+    response = source_history(endpoint)
+    if response is None:
+        return unclassified
     commits = response.json()
-    if not commits:
-        LOG.warning("No public source baseline before cutoff: %s", article.url)
-        return Change(
-            article.title, article.url, "Historical candidate", "", article.text, unavailable
-        )
-    before_url = f"https://raw.githubusercontent.com/{repo}/{commits[0]['sha']}/{quote(path)}"
     # Pin both source versions instead of comparing against a moving branch.
-    current_commits = get(
+    current = source_history(
         f"https://api.github.com/repos/{repo}/commits?path={quote(path, safe='')}"
         f"&until={quote(until_value, safe='')}&per_page=1",
-        github=True,
-    ).json()
+    )
+    if current is None:
+        return unclassified
+    current_commits = current.json()
     if not current_commits:
-        return Change(
-            article.title, article.url, "Historical candidate", "", article.text, unavailable
-        )
+        LOG.warning("No current public source commit available: %s", article.url)
+        return unclassified
+    if not commits:
+        evidence = creation_evidence(repo, path, current, cutoff, end)
+        if evidence is not None:
+            return Change(
+                article.title, article.url, "New source document", "", article.text,
+                evidence, category="Newly created",
+            )
+        LOG.warning("Cannot classify document without a source baseline: %s", article.url)
+        return unclassified
+    before_url = f"https://raw.githubusercontent.com/{repo}/{commits[0]['sha']}/{quote(path)}"
     after_url = (
         f"https://raw.githubusercontent.com/{repo}/{current_commits[0]['sha']}/{quote(path)}"
     )
@@ -334,9 +384,7 @@ def historical_change(
     after_response = session().get(after_url, timeout=(15, 90))
     if 404 in (before_response.status_code, after_response.status_code):
         LOG.warning("Public historical source file missing: %s", article.url)
-        return Change(
-            article.title, article.url, "Historical candidate", "", article.text, unavailable
-        )
+        return unclassified
     before_response.raise_for_status()
     after_response.raise_for_status()
     before_response.encoding = "utf-8"
@@ -358,6 +406,7 @@ def historical_change(
         before,
         after,
         evidence,
+        category="Updated",
     )
 
 

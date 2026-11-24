@@ -259,6 +259,7 @@ def test_window_boundary_and_no_fake_history(
     )
     assert {change.url for change in changes} == {URL, URL + "/now"}
     assert changes[0].before == ""
+    assert all(change.category == "Unclassified" for change in changes)
     assert "not a feature release date" in changes[0].evidence
     assert scanned == articles
 
@@ -272,6 +273,7 @@ def test_failed_fetch_does_not_produce_report(monkeypatch: pytest.MonkeyPatch) -
 def test_unavailable_historical_source_labeled() -> None:
     change = monitor.historical_change(article("Current only"), NOW - timedelta(days=30))
     assert not change.before
+    assert change.category == "Unclassified"
     assert "unavailable" in change.evidence
 
 
@@ -283,7 +285,6 @@ def test_source_metadata_only_changes_ignored() -> None:
 def test_historical_source_uses_cutoff_commit(monkeypatch: pytest.MonkeyPatch) -> None:
     parsed = parse_article(URL, HTML, "")
     responses = [
-        Mock(status_code=200, json=lambda: [{"sha": "baseline-sha"}]),
         Mock(status_code=200, text="---\nms.date: old\n---\nOld source body"),
         Mock(status_code=200, text="---\nms.date: new\n---\nNew source body"),
     ]
@@ -291,7 +292,11 @@ def test_historical_source_uses_cutoff_commit(monkeypatch: pytest.MonkeyPatch) -
     client.get.side_effect = responses
     monkeypatch.setattr(monitor, "session", lambda: client)
     monkeypatch.setattr(
-        monitor, "get", lambda *args, **kwargs: Mock(json=lambda: [{"sha": "current-sha"}])
+        monitor, "source_history",
+        Mock(side_effect=[
+            Mock(json=lambda: [{"sha": "baseline-sha"}]),
+            Mock(json=lambda: [{"sha": "current-sha"}]),
+        ]),
     )
     change = monitor.historical_change(parsed, NOW - timedelta(days=30))
     assert change.before == "Old source body"
@@ -299,6 +304,107 @@ def test_historical_source_uses_cutoff_commit(monkeypatch: pytest.MonkeyPatch) -
     assert "baseline-sha" in change.evidence
     assert "current-sha" in change.evidence
     assert "NOT a verified historical website difference" in change.evidence
+    assert change.category == "Updated"
+
+
+@pytest.mark.parametrize(
+    ("created", "status", "expected"),
+    [
+        (NOW - timedelta(days=7), "added", "Newly created"),
+        (NOW, "added", "Newly created"),
+        (NOW - timedelta(days=7, microseconds=1), "added", "Unclassified"),
+        (NOW + timedelta(microseconds=1), "added", "Unclassified"),
+        (NOW - timedelta(days=1), "renamed", "Unclassified"),
+        (NOW - timedelta(days=1), "modified", "Unclassified"),
+    ],
+)
+def test_new_source_requires_an_in_window_file_addition(
+    monkeypatch: pytest.MonkeyPatch, created: datetime, status: str, expected: str
+) -> None:
+    parsed = parse_article(URL, HTML, "")
+    history = Mock(side_effect=[
+        Mock(json=lambda: []),
+        Mock(
+            links={},
+            json=lambda: [{
+                "sha": "first-sha",
+                "commit": {"committer": {"date": created.isoformat()}},
+            }],
+        ),
+        Mock(json=lambda: {"files": [{"filename": "powerapps-docs/a.md", "status": status}]}),
+    ])
+    monkeypatch.setattr(monitor, "source_history", history)
+    change = monitor.historical_change(parsed, NOW - timedelta(days=7), until=NOW)
+    assert change.category == expected
+    if expected == "Newly created":
+        assert change.kind == "New source document"
+        assert "first-sha" in change.evidence
+        assert "not its website publication date" in change.evidence
+        assert change.after == parsed.text
+    else:
+        assert change.kind == "Historical candidate"
+    baseline_url = history.call_args_list[0].args[0]
+    assert "2026-10-26T00%3A59%3A59.999999Z" in baseline_url
+
+
+def test_creation_checks_oldest_commit_and_paginated_commit_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parsed = parse_article(URL, HTML, "")
+    oldest_url = "https://api.github.com/repos/MicrosoftDocs/powerapps-docs/commits?page=2"
+    files_url = "https://api.github.com/repos/MicrosoftDocs/powerapps-docs/commits/first?page=2"
+    history = Mock(side_effect=[
+        Mock(json=lambda: []),
+        Mock(json=lambda: [{"sha": "latest"}], links={"last": {"url": oldest_url}}),
+        Mock(json=lambda: [{
+            "sha": "first",
+            "commit": {"committer": {"date": (NOW - timedelta(days=1)).isoformat()}},
+        }]),
+        Mock(
+            json=lambda: {"files": [{"filename": "other.md", "status": "added"}]},
+            links={"next": {"url": files_url}},
+        ),
+        Mock(json=lambda: {
+            "files": [{"filename": "powerapps-docs/a.md", "status": "added"}],
+        }),
+    ])
+    monkeypatch.setattr(monitor, "source_history", history)
+    change = monitor.historical_change(parsed, NOW - timedelta(days=7), until=NOW)
+    assert change.category == "Newly created"
+    assert "/commit/first " in change.evidence
+    assert history.call_args_list[2].args == (oldest_url,)
+    assert history.call_args_list[4].args == (files_url,)
+
+
+@pytest.mark.parametrize("status", [404, 409])
+def test_inaccessible_source_history_is_unclassified(
+    monkeypatch: pytest.MonkeyPatch, status: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    response = requests.Response()
+    response.status_code = status
+    client = Mock()
+    client.get.return_value = response
+    monkeypatch.setattr(monitor, "session", lambda: client)
+    change = monitor.historical_change(parse_article(URL, HTML, ""), NOW)
+    assert change.category == "Unclassified"
+    assert "No accessible public source history" in caplog.text
+
+
+def test_missing_source_bodies_do_not_assert_a_verified_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        monitor, "source_history",
+        Mock(side_effect=[
+            Mock(json=lambda: [{"sha": "baseline"}]),
+            Mock(json=lambda: [{"sha": "current"}]),
+        ]),
+    )
+    client = Mock()
+    client.get.return_value = Mock(status_code=404)
+    monkeypatch.setattr(monitor, "session", lambda: client)
+    change = monitor.historical_change(parse_article(URL, HTML, ""), NOW)
+    assert change.category == "Unclassified"
 
 
 def test_historical_rate_limit_not_silently_ignored(monkeypatch: pytest.MonkeyPatch) -> None:

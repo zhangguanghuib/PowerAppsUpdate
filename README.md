@@ -49,10 +49,18 @@ available in the repository and the workflow fails visibly.
   silently skipping articles. Future timestamps are excluded.
 - Every run recomputes its requested window; previous scans do not suppress
   articles. Only the Power Apps scope above is monitored; no persistent scan baseline is needed.
-- New and updated articles are combined, not falsely classified by modification
-  date. A recent date alone does not establish an article's creation date.
+- PDF sections show **Newly created**, **Updated**, then **Unclassified** documents,
+  retaining the scan's newest-modification-first order within each section.
+  Classification uses public GitHub source history, not modification dates.
+  "Newly created" requires that the first available commit for the source path
+  added the file within the observation window. Renames are not treated as additions.
+  This identifies new public source files, not verified website publication dates;
+  repository imports and copies can look like new documents.
+  "Updated" requires an accessible source-body comparison with a version predating
+  the window. Missing history, missing source files, or ambiguous first commits
+  remain explicitly unclassified rather than being guessed as new or updated.
 - When public GitHub source history is accessible, compare the last source
-  version at/before the window start against the latest version at/before the
+  version before the window start against the latest version at/before the
   run time. Summaries contain the number of changed blocks and short
   representative added/updated and removed/replaced excerpts, not an AI-written
   interpretation or full article reproduction.
@@ -92,7 +100,8 @@ uv run python monitor.py --days 7 --limit 3 --no-history --output tmp\smoke
 
 `--limit` is a partial smoke test and marks its PDF as incomplete.
 `--no-history` explicitly disables history lookup; all summaries are labeled
-current overviews, not verified changes. Neither flag is used by the workflow.
+current overviews, not verified changes, and all entries are unclassified.
+Neither flag is used by the workflow.
 The default PDF font is Windows Arial or Linux DejaVu Sans. Set `PDF_FONT` to
 another Unicode TrueType font if necessary; unsupported characters appear as
 `[U+XXXX]` instead of silently disappearing.

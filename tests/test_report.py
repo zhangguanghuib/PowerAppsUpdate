@@ -44,6 +44,65 @@ def test_metadata_only_summary() -> None:
     assert "no public source-body changes" in summarize(change)
 
 
+def test_new_document_summary_does_not_claim_missing_history_or_feature_release() -> None:
+    change = Change(
+        "Example", URL, "New source document", "", "Example\nConfigure a canvas app.",
+        "First source addition.", category="Newly created",
+    )
+    summary = summarize(change)
+    assert "new public source file; publication date unverified" in summary
+    assert "Configure a canvas app." in summary
+    assert "history unavailable" not in summary
+
+
+def test_pdf_groups_new_updated_and_unclassified_documents(tmp_path: Path) -> None:
+    changes = [
+        Change("Unknown article", URL + "/unknown", "Historical candidate", "", "Body", ""),
+        Change(
+            "Existing article", URL + "/updated", "Historical source comparison",
+            "Old", "New", "Comparison evidence.", category="Updated",
+        ),
+        Change(
+            "Recent new article", URL + "/newer", "New source document", "", "Overview",
+            "First source addition evidence.", category="Newly created",
+        ),
+        Change(
+            "Earlier new article", URL + "/older", "New source document", "", "Overview",
+            "Another addition.", category="Newly created",
+        ),
+    ]
+    articles = {
+        change.url: Article(change.url, change.title, change.after, "2026-11-08T00:00:00Z", "")
+        for change in changes
+    }
+    destination = tmp_path / "grouped.pdf"
+    generate_pdf(
+        changes, destination, now=datetime(2026, 11, 10, tzinfo=UTC),
+        since="2026-11-03T00:00:00+00:00", articles=articles,
+    )
+    pdf = PdfReader(destination)
+    text = " ".join(" ".join(page.extract_text() for page in pdf.pages).split())
+    expected_order = [
+        "Newly created documents", "1. Recent new article", "2. Earlier new article",
+        "Updated documents", "3. Existing article",
+        "Unclassified documents", "4. Unknown article",
+    ]
+    positions = [text.index(value) for value in expected_order]
+    assert positions == sorted(positions)
+    assert "First source addition evidence." in text
+    assert "Comparison evidence." in text
+    assert sum(len(page.get("/Annots", [])) for page in pdf.pages) == len(changes)
+    for section, title in [
+        ("Newly created documents", "Recent new article"),
+        ("Updated documents", "Existing article"),
+        ("Unclassified documents", "Unknown article"),
+    ]:
+        assert any(
+            section in page.extract_text() and title in page.extract_text()
+            for page in pdf.pages
+        )
+
+
 def test_excerpts_bounded_and_markdown_links_cleaned() -> None:
     assert excerpt("[Tools](https://example.com) are available.") == "Tools are available."
     assert excerpt("Tools (https://example.com) are available.") == "Tools are available."

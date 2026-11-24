@@ -1,9 +1,11 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from pypdf import PdfReader
 
 from monitor import Article, Change
+from products import POWER_APPS, POWER_AUTOMATE, Product
 from report import changed_blocks, excerpt, generate_pdf, summarize
 
 URL = "https://learn.microsoft.com/en-us/power-apps/test"
@@ -55,19 +57,23 @@ def test_new_document_summary_does_not_claim_missing_history_or_feature_release(
     assert "history unavailable" not in summary
 
 
-def test_pdf_groups_new_updated_and_unclassified_documents(tmp_path: Path) -> None:
+@pytest.mark.parametrize("product", [POWER_APPS, POWER_AUTOMATE])
+def test_pdf_groups_new_updated_and_unclassified_documents(
+    tmp_path: Path, product: Product
+) -> None:
+    url = product.roots[0] + "test"
     changes = [
-        Change("Unknown article", URL + "/unknown", "Historical candidate", "", "Body", ""),
+        Change("Unknown article", url + "/unknown", "Historical candidate", "", "Body", ""),
         Change(
-            "Existing article", URL + "/updated", "Historical source comparison",
+            "Existing article", url + "/updated", "Historical source comparison",
             "Old", "New", "Comparison evidence.", category="Updated",
         ),
         Change(
-            "Recent new article", URL + "/newer", "New source document", "", "Overview",
+            "Recent new article", url + "/newer", "New source document", "", "Overview",
             "First source addition evidence.", category="Newly created",
         ),
         Change(
-            "Earlier new article", URL + "/older", "New source document", "", "Overview",
+            "Earlier new article", url + "/older", "New source document", "", "Overview",
             "Another addition.", category="Newly created",
         ),
     ]
@@ -78,10 +84,16 @@ def test_pdf_groups_new_updated_and_unclassified_documents(tmp_path: Path) -> No
     destination = tmp_path / "grouped.pdf"
     generate_pdf(
         changes, destination, now=datetime(2026, 11, 10, tzinfo=UTC),
-        since="2026-11-03T00:00:00+00:00", articles=articles,
+        since="2026-11-03T00:00:00+00:00", articles=articles, product=product,
     )
     pdf = PdfReader(destination)
     text = " ".join(" ".join(page.extract_text() for page in pdf.pages).split())
+    assert f"MICROSOFT {product.name.upper()}" in text
+    assert pdf.metadata is not None
+    assert pdf.metadata.title == f"{product.name} documentation updates"
+    if product == POWER_AUTOMATE:
+        assert "excluding model-driven apps and Dataverse topics" not in text
+        assert "Power Apps" not in text
     expected_order = [
         "Newly created documents", "1. Recent new article", "2. Earlier new article",
         "Updated documents", "3. Existing article",

@@ -1,6 +1,9 @@
-# Power Apps documentation update monitor
+# Power Apps and Power Automate documentation update monitors
 
-Collect new or updated English articles from these Microsoft Learn directories:
+Separate GitHub Actions workflows collect new or updated English articles from
+these Microsoft Learn directories.
+
+### Power Apps
 
 - <https://learn.microsoft.com/en-us/power-apps/>
 - <https://learn.microsoft.com/en-us/troubleshoot/power-platform/power-apps/>
@@ -13,6 +16,16 @@ mentions in otherwise relevant articles do not exclude those articles. Shared
 Power Apps content remains included unless its path, title, or metadata matches
 an excluded topic.
 
+### Power Automate
+
+- <https://learn.microsoft.com/en-us/power-automate/>
+- <https://learn.microsoft.com/en-us/troubleshoot/power-platform/power-automate/>
+
+All topics under these roots are included, including cloud and desktop flows.
+The Power Apps model-driven/Dataverse exclusions do not apply to Power Automate.
+Each product has its own PDF filenames, release tags, and report branding; scanning
+one product does not include articles from the other.
+
 Generate a concise PDF containing each article's **clickable URL, title, modification
 timestamp, and short summary**. Reports are committed under [output/pdf](output/pdf)
 and also uploaded as GitHub Release attachments. No email, Azure service, or AI key
@@ -21,14 +34,17 @@ is required.
 ## Manual trigger and lookback
 
 1. Push this code to your GitHub repository's default branch.
-2. Open **Actions > Power Apps documentation monitor > Run workflow**.
+2. Open **Actions**, choose **Power Apps documentation monitor** or
+   **Power Automate documentation monitor**, then select **Run workflow**.
 3. Choose a branch and enter **days**: a positive integer, default **7**
    (for example, `1`, `14`, or `30`). The input is not limited to 7 days.
 4. After success, open the PDF in that branch's `output/pdf` directory or download
    it from **Releases > Assets**.
 
-The daily schedule remains enabled at `01:00 UTC` (09:00 Beijing time) and uses
-7 days. GitHub may delay scheduled runs. Manual runs work independently of the
+Both workflows run daily at `01:00 UTC` (09:00 Beijing time) and use
+7 days. Runs targeting the same branch are serialized across both workflows to
+avoid concurrent PDF commits and push conflicts. GitHub may delay scheduled runs.
+Manual runs work independently of the
 schedule. Each run produces a PDF, including an explicit no-results report when
 no articles match.
 
@@ -48,7 +64,8 @@ available in the repository and the workflow fails visibly.
   only if `updated_at` is absent. Missing/invalid dates fail the run rather than
   silently skipping articles. Future timestamps are excluded.
 - Every run recomputes its requested window; previous scans do not suppress
-  articles. Only the Power Apps scope above is monitored; no persistent scan baseline is needed.
+  articles. Only the selected product's scope above is monitored; no persistent scan baseline
+  is needed.
 - PDF sections show **Newly created**, **Updated**, then **Unclassified** documents,
   retaining the scan's newest-modification-first order within each section.
   Classification uses public GitHub source history, not modification dates.
@@ -84,11 +101,15 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 uv sync --locked
 uv run python monitor.py --days 7
 uv run python monitor.py --days 30
+uv run python monitor.py --product power-automate --days 7
+uv run python monitor.py --product power-automate --days 30
 ```
 
-Final PDFs are written to `output\pdf\power-apps-updates-*.pdf`. The manifest
-in the same directory records the exact UTC window, scanned count, match count,
-and report path. Local execution saves files but does not commit or push them.
+Power Apps is the default when `--product` is omitted. Final PDFs are written to
+`output\pdf\power-apps-updates-*.pdf` or `output\pdf\power-automate-updates-*.pdf`.
+The manifest in the same directory describes the latest local run and records the
+product, exact UTC window, scanned count, match count, and report path.
+Local execution saves files but does not commit or push them.
 For public GitHub history, set `GH_TOKEN` to an authorized token to avoid anonymous
 API limits; do not commit credentials.
 
@@ -96,6 +117,7 @@ API limits; do not commit credentials.
 uv run pytest
 uv run ruff check .
 uv run python monitor.py --days 7 --limit 3 --no-history --output tmp\smoke
+uv run python monitor.py --product power-automate --days 7 --limit 3 --no-history --output tmp\smoke-automate
 ```
 
 `--limit` is a partial smoke test and marks its PDF as incomplete.

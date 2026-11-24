@@ -7,6 +7,7 @@ output/*
 output/pdf/*
 !output/pdf/copilot-studio-updates-*.pdf
 !output/pdf/power-apps-updates-*.pdf
+!output/pdf/power-automate-updates-*.pdf
 tmp/
 *.egg-info/
 .env

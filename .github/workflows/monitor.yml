@@ -15,7 +15,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: power-apps-documentation-monitor
+  group: documentation-monitor-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -44,7 +44,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          uv run --no-sync python monitor.py --days "$DAYS"
+          uv run --no-sync python monitor.py --product power-apps --days "$DAYS"
       - name: Commit PDF to the selected repository branch
         env:
           PDF: ${{ steps.scan.outputs.pdf }}

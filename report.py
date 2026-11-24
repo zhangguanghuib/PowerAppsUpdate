@@ -24,6 +24,8 @@ from reportlab.platypus import (
     Spacer,
 )
 
+from products import POWER_APPS, Product
+
 if TYPE_CHECKING:
     from monitor import Article, Change
 
@@ -124,6 +126,7 @@ def generate_pdf(
     since: str,
     articles: dict[str, Article],
     partial: bool = False,
+    product: Product = POWER_APPS,
 ) -> None:
     font = register_font()
     styles = getSampleStyleSheet()
@@ -156,7 +159,7 @@ def generate_pdf(
             value = "&#160;" * indent + value[indent:]
         story.append(Paragraph(value, style))
 
-    paragraph("MICROSOFT POWER APPS", styles["Title"])
+    paragraph(f"MICROSOFT {product.name.upper()}", styles["Title"])
     paragraph("Documentation update digest", styles["Heading1"])
     paragraph(f"Generated (UTC): {now.isoformat()}")
     paragraph(f"Observation window: {since} to {now.isoformat()}")
@@ -165,8 +168,8 @@ def generate_pdf(
         paragraph("PARTIAL SMOKE TEST - not a complete directory report", heading)
     story.append(Spacer(1, 6 * mm))
     paragraph(
-        "Scope: English Microsoft Learn Power Apps documentation and troubleshooting, "
-        "excluding model-driven apps and Dataverse topics. "
+        f"Scope: English Microsoft Learn {product.name} documentation and troubleshooting"
+        f"{product.exclusion_note}. "
         "Documentation changes are not necessarily new product features. Modification timestamps "
         "are not feature release dates. No AI interpretation is used."
     )
@@ -235,7 +238,7 @@ def generate_pdf(
         canvas.setStrokeColor(colors.HexColor("#D7E1E5"))
         canvas.line(18 * mm, 17 * mm, 192 * mm, 17 * mm)
         canvas.setFont(font, 8)
-        canvas.drawString(18 * mm, 12 * mm, "Power Apps | Microsoft Learn update digest")
+        canvas.drawString(18 * mm, 12 * mm, f"{product.name} | Microsoft Learn update digest")
         canvas.drawRightString(192 * mm, 12 * mm, f"Page {document.page}")
         canvas.restoreState()
 
@@ -247,7 +250,7 @@ def generate_pdf(
         rightMargin=18 * mm,
         topMargin=18 * mm,
         bottomMargin=23 * mm,
-        title="Power Apps documentation updates",
-        author="Power Apps documentation monitor",
+        title=f"{product.name} documentation updates",
+        author=f"{product.name} documentation monitor",
     )
     document.build(story, onFirstPage=footer, onLaterPages=footer)

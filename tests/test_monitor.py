@@ -11,6 +11,7 @@ import requests
 
 import monitor
 from monitor import Article, canonical_url, parse_article
+from products import POWER_APPS, POWER_AUTOMATE, Product
 
 URL = monitor.ROOTS[0] + "test-article"
 NOW = datetime(2026, 11, 2, 1, tzinfo=UTC)
@@ -230,7 +231,7 @@ def test_excluded_redirects_are_skipped_but_out_of_scope_redirects_fail(
 
 
 def test_scan_omits_excluded_articles(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(monitor, "fetch_article", lambda item: None)
+    monkeypatch.setattr(monitor, "fetch_article", lambda item, **kwargs: None)
     history = Mock()
     monkeypatch.setattr(monitor, "historical_change", history)
     changes, articles = monitor.scan({URL: ""}, now=NOW)
@@ -253,7 +254,7 @@ def test_window_boundary_and_no_fake_history(
             url=URL + "/future", modified=(NOW + timedelta(days=1)).isoformat()
         ),
     }
-    monkeypatch.setattr(monitor, "fetch_article", lambda item: articles[item[0]])
+    monkeypatch.setattr(monitor, "fetch_article", lambda item, **kwargs: articles[item[0]])
     changes, scanned = monitor.scan(
         dict.fromkeys(articles, ""), now=NOW, history=False, days=days
     )
@@ -455,19 +456,25 @@ def test_date_parsing_assumes_utc() -> None:
     assert monitor.date_value("2026-11-02T09:00:00+08:00") == NOW
 
 
+@pytest.mark.parametrize("product", [POWER_APPS, POWER_AUTOMATE])
 def test_repeated_runs_recompute_requested_window(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    product: Product,
 ) -> None:
-    monkeypatch.setattr(monitor, "discover", lambda: {URL: ""})
+    url = product.roots[0] + "test-article"
+    discovery = Mock(return_value={url: ""})
+    monkeypatch.setattr(monitor, "discover", discovery)
     monkeypatch.setattr(
         monitor, "fetch_article",
-        lambda item: article(
-            "After", modified=(datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+        lambda item, **kwargs: article(
+            "After", url=url, modified=(datetime.now(UTC) - timedelta(seconds=1)).isoformat()
         ),
     )
     output = tmp_path / "output"
-    args = argparse.Namespace(days=7, output=output, workers=1, limit=None, no_history=True)
+    args = argparse.Namespace(
+        days=7, output=output, workers=1, limit=None, no_history=True, product=product.slug,
+    )
     monitor.run(args)
     manifest = json.loads((output / "manifest.json").read_text())
     assert manifest["changed"] is True
@@ -475,8 +482,10 @@ def test_repeated_runs_recompute_requested_window(
     assert manifest["days"] == 7
     assert manifest["scanned"] == 1
     assert not manifest["partial"]
-    assert Path(manifest["pdf"]).name.startswith("power-apps-updates-")
-    assert manifest["tag"].startswith("power-apps-docs-")
+    assert Path(manifest["pdf"]).name.startswith(f"{product.slug}-updates-")
+    assert manifest["tag"].startswith(f"{product.slug}-docs-")
+    assert manifest["product"] == product.slug
+    discovery.assert_called_once_with(product=product)
     args.output = tmp_path / "second"
     monitor.run(args)
     second_manifest = json.loads((args.output / "manifest.json").read_text())
@@ -491,10 +500,10 @@ def test_pdf_failure_does_not_write_manifest(
 ) -> None:
     import report
 
-    monkeypatch.setattr(monitor, "discover", lambda: {URL: ""})
+    monkeypatch.setattr(monitor, "discover", lambda **kwargs: {URL: ""})
     monkeypatch.setattr(
         monitor, "fetch_article",
-        lambda item: article(
+        lambda item, **kwargs: article(
             "After", modified=(datetime.now(UTC) - timedelta(seconds=1)).isoformat()
         ),
     )
@@ -502,7 +511,10 @@ def test_pdf_failure_does_not_write_manifest(
     output = tmp_path / "output"
     with pytest.raises(OSError, match="disk full"):
         monitor.run(
-            argparse.Namespace(days=7, output=output, workers=1, limit=None, no_history=True)
+            argparse.Namespace(
+                days=7, output=output, workers=1, limit=None, no_history=True,
+                product="power-apps",
+            )
         )
     assert not (output / "manifest.json").exists()
 
@@ -511,7 +523,9 @@ def test_pdf_failure_does_not_write_manifest(
 def test_unusable_dates_fail_instead_of_skipping(
     monkeypatch: pytest.MonkeyPatch, modified: str
 ) -> None:
-    monkeypatch.setattr(monitor, "fetch_article", lambda item: article(modified=modified))
+    monkeypatch.setattr(
+        monitor, "fetch_article", lambda item, **kwargs: article(modified=modified)
+    )
     with pytest.raises(ValueError):
         monitor.scan({URL: ""}, now=NOW, history=False)
 
@@ -523,10 +537,14 @@ def test_nonpositive_days_rejected(days: int) -> None:
 
 
 def test_run_generates_no_results_pdf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(monitor, "discover", lambda: {URL: ""})
-    monkeypatch.setattr(monitor, "fetch_article", lambda item: article(modified="2000-01-01"))
+    monkeypatch.setattr(monitor, "discover", lambda **kwargs: {URL: ""})
+    monkeypatch.setattr(
+        monitor, "fetch_article", lambda item, **kwargs: article(modified="2000-01-01")
+    )
     monitor.run(
-        argparse.Namespace(days=7, output=tmp_path, workers=1, limit=None, no_history=True)
+        argparse.Namespace(
+            days=7, output=tmp_path, workers=1, limit=None, no_history=True, product="power-apps",
+        )
     )
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     assert manifest["count"] == 0
@@ -558,3 +576,99 @@ def test_cli_accepts_default_and_custom_days(
     monkeypatch.setattr(monitor, "run", run)
     monitor.main()
     assert run.call_args.args[0].days == (int(value) if value is not None else 7)
+    assert run.call_args.args[0].product == "power-apps"
+
+
+@pytest.mark.parametrize("value", ["power-apps", "power-automate"])
+def test_cli_selects_product(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    monkeypatch.setattr("sys.argv", ["monitor.py", "--product", value])
+    run = Mock()
+    monkeypatch.setattr(monitor, "run", run)
+    monitor.main()
+    assert run.call_args.args[0].product == value
+
+
+def test_cli_rejects_unknown_product(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sys.argv", ["monitor.py", "--product", "unknown"])
+    run = Mock()
+    monkeypatch.setattr(monitor, "run", run)
+    with pytest.raises(SystemExit) as error:
+        monitor.main()
+    assert error.value.code == 2
+    run.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["getting-started", "desktop-flows/run-desktop-flows", "dataverse/create-update-trigger"],
+)
+def test_power_automate_scope_does_not_inherit_apps_exclusions(path: str) -> None:
+    url = POWER_AUTOMATE.roots[0] + path
+    assert canonical_url(url, url, product=POWER_AUTOMATE) == url
+    assert canonical_url(url, url) is None
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        POWER_APPS.roots[0] + "maker/canvas-apps/test",
+        POWER_APPS.roots[1] + "test",
+        "https://learn.microsoft.com/en-us/power-automate-other/test",
+        "https://learn.microsoft.com/zh-cn/power-automate/test",
+    ],
+)
+def test_power_automate_rejects_other_product_and_locale_urls(url: str) -> None:
+    assert canonical_url(url, url, product=POWER_AUTOMATE) is None
+
+
+def test_power_automate_discovery_uses_its_own_sitemap_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    index = """<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <sitemap><loc>https://learn.microsoft.com/_sitemaps/power-apps_en-us_1.xml</loc></sitemap>
+    <sitemap><loc>https://learn.microsoft.com/_sitemaps/power-automate_en-us_1.xml</loc></sitemap>
+    <sitemap><loc>https://learn.microsoft.com/_sitemaps/troubleshoot_en-us_1.xml</loc></sitemap>
+    </sitemapindex>"""
+    included = [
+        POWER_AUTOMATE.roots[0] + "dataverse/create-update-trigger",
+        POWER_AUTOMATE.roots[0] + "desktop-flows/run-desktop-flows",
+        POWER_AUTOMATE.roots[1] + "flow-run-issues/triggers-troubleshoot",
+    ]
+    sitemap = (
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        + "".join(
+            f"<url><loc>{url}</loc><lastmod>2026-11-01</lastmod></url>"
+            for url in [*included, URL, POWER_APPS.roots[1] + "test"]
+        )
+        + "</urlset>"
+    )
+    get = Mock(side_effect=[
+        Mock(content=index.encode()),
+        Mock(content=sitemap.encode()),
+        Mock(content=sitemap.encode()),
+    ])
+    monkeypatch.setattr(monitor, "get", get)
+    inventory = monitor.discover(product=POWER_AUTOMATE)
+    assert inventory == dict.fromkeys(included, "2026-11-01")
+    assert len(get.call_args_list) == 3
+    assert all("/power-apps_" not in call.args[0] for call in get.call_args_list)
+
+
+def test_power_automate_scan_fetches_its_product_and_source_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    url = POWER_AUTOMATE.roots[0] + "dataverse/create-update-trigger"
+    html = HTML.replace("Example article", "Use Dataverse with Power Automate").replace(
+        "powerapps-docs-pr/blob/live/powerapps-docs/a.md",
+        "power-automate-docs-pr/blob/live/articles/dataverse/create-update-trigger.md",
+    ).replace("2026-10-25T01:00:00Z", NOW.isoformat())
+    get = Mock(return_value=Mock(url=url, text=html))
+    monkeypatch.setattr(monitor, "get", get)
+    changes, articles = monitor.scan({url: ""}, now=NOW, history=False, product=POWER_AUTOMATE)
+    assert len(changes) == 1
+    assert changes[0].url == url
+    assert changes[0].title == "Use Dataverse with Power Automate"
+    assert monitor.source_location(articles[url]) == (
+        "MicrosoftDocs/power-automate-docs", "articles/dataverse/create-update-trigger.md",
+    )
+    get.assert_called_once_with(url)

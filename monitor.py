@@ -11,6 +11,7 @@ import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote, unquote, urljoin, urlsplit, urlunsplit
@@ -20,14 +21,9 @@ from bs4 import BeautifulSoup, Comment
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-ROOTS = (
-    "https://learn.microsoft.com/en-us/power-apps/",
-    "https://learn.microsoft.com/en-us/troubleshoot/power-platform/power-apps/",
-)
-EXCLUDED_TOPICS = re.compile(
-    r"model[-\s]+driven|dataverse|data[-\s]+platform|common[-\s]+data[-\s]+service",
-    re.IGNORECASE,
-)
+from products import POWER_APPS, PRODUCTS, Product
+
+ROOTS = POWER_APPS.roots
 SITEMAP_INDEX = "https://learn.microsoft.com/_sitemaps/sitemapindex.xml"
 NS = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 LOG = logging.getLogger(__name__)
@@ -58,7 +54,7 @@ class Change:
 def session() -> requests.Session:
     if not hasattr(_LOCAL, "session"):
         client = requests.Session()
-        client.headers["User-Agent"] = "PowerAppsDocsMonitor/0.1 (documentation checks)"
+        client.headers["User-Agent"] = "MicrosoftLearnDocsMonitor/0.1 (documentation checks)"
         retry = Retry(
             total=4,
             backoff_factor=1,
@@ -81,19 +77,19 @@ def get(url: str, *, github: bool = False) -> requests.Response:
     return response
 
 
-def canonical_url(value: str, base: str) -> str | None:
+def canonical_url(value: str, base: str, *, product: Product = POWER_APPS) -> str | None:
     parsed = urlsplit(urljoin(base, value))
     if parsed.scheme != "https" or parsed.netloc.lower() != "learn.microsoft.com":
         return None
-    if EXCLUDED_TOPICS.search(unquote(parsed.path)):
+    if product.excluded_topics and product.excluded_topics.search(unquote(parsed.path)):
         return None
     url = urlunsplit(("https", "learn.microsoft.com", parsed.path.rstrip("/"), "", ""))
-    if any(url == root.rstrip("/") or url.startswith(root) for root in ROOTS):
+    if any(url == root.rstrip("/") or url.startswith(root) for root in product.roots):
         return url
     return None
 
 
-def discover() -> dict[str, str]:
+def discover(*, product: Product = POWER_APPS) -> dict[str, str]:
     index = ET.fromstring(get(SITEMAP_INDEX).content)
     maps = [
         node.text
@@ -101,11 +97,11 @@ def discover() -> dict[str, str]:
         if node.text
         and re.fullmatch(
             r"https://learn\.microsoft\.com/_sitemaps/"
-            r"(power-apps|troubleshoot)_en-us_\d+\.xml",
+            rf"({re.escape(product.slug)}|troubleshoot)_en-us_\d+\.xml",
             node.text,
         )
     ]
-    if not any("/power-apps_" in url for url in maps) or not any(
+    if not any(f"/{product.slug}_" in url for url in maps) or not any(
         "/troubleshoot_" in url for url in maps
     ):
         raise RuntimeError("Both official sitemap groups are required; discovery is incomplete.")
@@ -114,10 +110,10 @@ def discover() -> dict[str, str]:
         tree = ET.fromstring(get(map_url).content)
         for node in tree.findall("s:url", NS):
             location = node.findtext("s:loc", "", NS)
-            url = canonical_url(location, map_url)
+            url = canonical_url(location, map_url, product=product)
             if url:
                 inventory[url] = node.findtext("s:lastmod", "", NS)
-    if not all(any(url.startswith(root) for url in inventory) for root in ROOTS):
+    if not all(any(url.startswith(root) for url in inventory) for root in product.roots):
         raise RuntimeError("A monitored documentation directory is empty.")
     LOG.info("Discovered %d URLs from %d official sitemaps", len(inventory), len(maps))
     return inventory
@@ -223,7 +219,9 @@ def parse_article(url: str, html: str, lastmod: str) -> Article:
     )
 
 
-def fetch_article(item: tuple[str, str]) -> Article | None:
+def fetch_article(
+    item: tuple[str, str], *, product: Product = POWER_APPS
+) -> Article | None:
     url, lastmod = item
     response = get(url)
     redirected = urlsplit(response.url)
@@ -233,19 +231,22 @@ def fetch_article(item: tuple[str, str]) -> Article | None:
         and any(
             redirected.path == root.rstrip("/")
             or redirected.path.startswith(root)
-            for root in (urlsplit(value).path for value in ROOTS)
+            for root in (urlsplit(value).path for value in product.roots)
         )
-        and EXCLUDED_TOPICS.search(unquote(redirected.path))
+        and product.excluded_topics
+        and product.excluded_topics.search(unquote(redirected.path))
     ):
         LOG.info("Skipping excluded topic redirect: %s -> %s", url, response.url)
         return None
-    target = canonical_url(response.url, url)
+    target = canonical_url(response.url, url, product=product)
     if target is None:
         raise ValueError(
             f"Article redirected outside monitored directories: {url} -> {response.url}"
         )
     article = parse_article(url, response.text, lastmod)
-    if EXCLUDED_TOPICS.search(f"{article.title} {article.subservice}"):
+    if product.excluded_topics and product.excluded_topics.search(
+        f"{article.title} {article.subservice}"
+    ):
         LOG.info("Skipping excluded article topic: %s", url)
         return None
     return article
@@ -261,7 +262,7 @@ def date_value(value: str) -> datetime | None:
 def source_location(article: Article) -> tuple[str, str] | None:
     parsed = urlsplit(article.source_path)
     match = re.fullmatch(
-        r"/MicrosoftDocs/(powerapps-docs(?:-pr)?|SupportArticles-docs(?:-pr)?)"
+        r"/MicrosoftDocs/((?:powerapps-docs|power-automate-docs|SupportArticles-docs)(?:-pr)?)"
         r"/blob/[^/]+/(.+)",
         parsed.path,
         re.IGNORECASE,
@@ -417,6 +418,7 @@ def scan(
     workers: int = 4,
     history: bool = True,
     days: int = 7,
+    product: Product = POWER_APPS,
 ) -> tuple[list[Change], dict[str, Article]]:
     if days < 1:
         raise ValueError("Days must be a positive integer.")
@@ -424,7 +426,9 @@ def scan(
     with ThreadPoolExecutor(max_workers=workers) as pool:
         articles = {
             article.url: article
-            for article in pool.map(fetch_article, sorted(inventory.items()))
+            for article in pool.map(
+                partial(fetch_article, product=product), sorted(inventory.items())
+            )
             if article is not None
         }
     changes = []
@@ -456,29 +460,36 @@ def run(args: argparse.Namespace) -> None:
     from report import generate_pdf
 
     now = datetime.now(UTC)
-    inventory = discover()
+    product = PRODUCTS[args.product]
+    inventory = discover(product=product)
     if args.limit:
         inventory = dict(sorted(inventory.items())[: args.limit])
     changes, articles = scan(
-        inventory, now=now, workers=args.workers, history=not args.no_history, days=args.days
+        inventory, now=now, workers=args.workers, history=not args.no_history,
+        days=args.days, product=product,
     )
     args.output.mkdir(parents=True, exist_ok=True)
     since = (now - timedelta(days=args.days)).isoformat()
     digest = hashlib.sha256(
         json.dumps(
-            {"since": since, "until": now.isoformat(), "changes": [asdict(c) for c in changes]},
+            {
+                "product": product.slug, "since": since, "until": now.isoformat(),
+                "changes": [asdict(c) for c in changes],
+            },
             sort_keys=True,
         ).encode()
     ).hexdigest()[:16]
-    tag = f"power-apps-docs-{digest}"
-    pdf = args.output / f"power-apps-updates-{now:%Y-%m-%d}-{args.days}d-{digest}.pdf"
+    tag = f"{product.slug}-docs-{digest}"
+    pdf = args.output / f"{product.slug}-updates-{now:%Y-%m-%d}-{args.days}d-{digest}.pdf"
     generate_pdf(
-        changes, pdf, now=now, since=since, articles=articles, partial=bool(args.limit)
+        changes, pdf, now=now, since=since, articles=articles,
+        partial=bool(args.limit), product=product,
     )
     manifest: dict[str, Any] = {
         "changed": bool(changes), "count": len(changes), "days": args.days,
         "since": since, "until": now.isoformat(), "scanned": len(articles),
         "partial": bool(args.limit), "tag": tag, "pdf": str(pdf),
+        "product": product.slug,
     }
     (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     if os.environ.get("GITHUB_OUTPUT"):
@@ -488,7 +499,13 @@ def run(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Power Apps documentation summary reports.")
+    parser = argparse.ArgumentParser(
+        description="Power Apps and Power Automate documentation summary reports."
+    )
+    parser.add_argument(
+        "--product", choices=PRODUCTS, default=POWER_APPS.slug,
+        help="Documentation product to monitor (default: power-apps).",
+    )
     parser.add_argument(
         "--days", type=int, default=7, help="Look back this many days (default: 7)."
     )

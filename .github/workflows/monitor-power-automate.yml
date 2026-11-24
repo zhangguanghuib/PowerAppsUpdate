@@ -1,0 +1,84 @@
+name: Power Automate documentation monitor
+
+on:
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Number of days to look back (positive integer)"
+        required: true
+        default: "7"
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: documentation-monitor-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Require a branch for report commits
+        shell: bash
+        run: |
+          test "$GITHUB_REF_TYPE" = branch || { echo "::error::Run this workflow on a branch."; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.9"
+          python-version: "3.12"
+      - run: uv sync --locked --no-dev
+      - name: Scan and generate PDF
+        id: scan
+        env:
+          DAYS: ${{ inputs.days || '7' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-sync python monitor.py --product power-automate --days "$DAYS"
+      - name: Commit PDF to the selected repository branch
+        env:
+          PDF: ${{ steps.scan.outputs.pdf }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "$PDF"
+          git commit -m "Archive Power Automate documentation digest [skip ci]" \
+            -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push origin "HEAD:refs/heads/$GITHUB_REF_NAME"
+      - name: Archive PDF permanently as a release asset
+        env:
+          TAG: ${{ steps.scan.outputs.tag }}
+          PDF: ${{ steps.scan.outputs.pdf }}
+          COUNT: ${{ steps.scan.outputs.count }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --target "$(git rev-parse HEAD)" \
+              --title "Power Automate documentation: $COUNT documents" \
+              --notes "Links and short evidence-based summaries for the requested window. Modification dates are not feature releases. See the PDF for history limitations."
+          fi
+          gh release upload "$TAG" "$PDF" --clobber
+      - name: Keep diagnostic outputs for 30 days
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: power-automate-scan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            output/pdf/*.pdf
+            output/pdf/manifest.json
+          retention-days: 30
+          if-no-files-found: ignore

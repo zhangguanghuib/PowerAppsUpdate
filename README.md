@@ -1,9 +1,17 @@
-# Copilot Studio documentation update monitor
+# Power Apps documentation update monitor
 
 Collect new or updated English articles from these Microsoft Learn directories:
 
-- <https://learn.microsoft.com/en-us/microsoft-copilot-studio/>
-- <https://learn.microsoft.com/en-us/troubleshoot/power-platform/copilot-studio/>
+- <https://learn.microsoft.com/en-us/power-apps/>
+- <https://learn.microsoft.com/en-us/troubleshoot/power-platform/power-apps/>
+
+Model-driven apps and Dataverse are excluded using URL paths, article titles,
+and Microsoft Learn `ms.subservice` metadata. This covers the maker/developer
+`model-driven-apps` and `data-platform` sections, plus individual articles labeled
+with model-driven, Dataverse, or the legacy Common Data Service name. Incidental
+mentions in otherwise relevant articles do not exclude those articles. Shared
+Power Apps content remains included unless its path, title, or metadata matches
+an excluded topic.
 
 Generate a concise PDF containing each article's **clickable URL, title, modification
 timestamp, and short summary**. Reports are committed under [output/pdf](output/pdf)
@@ -13,7 +21,7 @@ is required.
 ## Manual trigger and lookback
 
 1. Push this code to your GitHub repository's default branch.
-2. Open **Actions > Copilot Studio documentation monitor > Run workflow**.
+2. Open **Actions > Power Apps documentation monitor > Run workflow**.
 3. Choose a branch and enter **days**: a positive integer, default **7**
    (for example, `1`, `14`, or `30`). The input is not limited to 7 days.
 4. After success, open the PDF in that branch's `output/pdf` directory or download
@@ -40,7 +48,7 @@ available in the repository and the workflow fails visibly.
   only if `updated_at` is absent. Missing/invalid dates fail the run rather than
   silently skipping articles. Future timestamps are excluded.
 - Every run recomputes its requested window; previous scans do not suppress
-  articles. Only Copilot Studio is monitored; no persistent scan baseline is needed.
+  articles. Only the Power Apps scope above is monitored; no persistent scan baseline is needed.
 - New and updated articles are combined, not falsely classified by modification
   date. A recent date alone does not establish an article's creation date.
 - When public GitHub source history is accessible, compare the last source
@@ -70,7 +78,7 @@ uv run python monitor.py --days 7
 uv run python monitor.py --days 30
 ```
 
-Final PDFs are written to `output\pdf\copilot-studio-updates-*.pdf`. The manifest
+Final PDFs are written to `output\pdf\power-apps-updates-*.pdf`. The manifest
 in the same directory records the exact UTC window, scanned count, match count,
 and report path. Local execution saves files but does not commit or push them.
 For public GitHub history, set `GH_TOKEN` to an authorized token to avoid anonymous

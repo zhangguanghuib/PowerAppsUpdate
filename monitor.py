@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urljoin, urlsplit, urlunsplit
+from urllib.parse import quote, unquote, urljoin, urlsplit, urlunsplit
 
 import requests
 from bs4 import BeautifulSoup, Comment
@@ -21,8 +21,12 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 ROOTS = (
-    "https://learn.microsoft.com/en-us/microsoft-copilot-studio/",
-    "https://learn.microsoft.com/en-us/troubleshoot/power-platform/copilot-studio/",
+    "https://learn.microsoft.com/en-us/power-apps/",
+    "https://learn.microsoft.com/en-us/troubleshoot/power-platform/power-apps/",
+)
+EXCLUDED_TOPICS = re.compile(
+    r"model[-\s]+driven|dataverse|data[-\s]+platform|common[-\s]+data[-\s]+service",
+    re.IGNORECASE,
 )
 SITEMAP_INDEX = "https://learn.microsoft.com/_sitemaps/sitemapindex.xml"
 NS = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
@@ -37,6 +41,7 @@ class Article:
     text: str
     modified: str
     source_path: str
+    subservice: str = ""
 
 
 @dataclass(frozen=True)
@@ -52,7 +57,7 @@ class Change:
 def session() -> requests.Session:
     if not hasattr(_LOCAL, "session"):
         client = requests.Session()
-        client.headers["User-Agent"] = "CopilotStudioDocsMonitor/0.1 (documentation checks)"
+        client.headers["User-Agent"] = "PowerAppsDocsMonitor/0.1 (documentation checks)"
         retry = Retry(
             total=4,
             backoff_factor=1,
@@ -79,6 +84,8 @@ def canonical_url(value: str, base: str) -> str | None:
     parsed = urlsplit(urljoin(base, value))
     if parsed.scheme != "https" or parsed.netloc.lower() != "learn.microsoft.com":
         return None
+    if EXCLUDED_TOPICS.search(unquote(parsed.path)):
+        return None
     url = urlunsplit(("https", "learn.microsoft.com", parsed.path.rstrip("/"), "", ""))
     if any(url == root.rstrip("/") or url.startswith(root) for root in ROOTS):
         return url
@@ -93,11 +100,11 @@ def discover() -> dict[str, str]:
         if node.text
         and re.fullmatch(
             r"https://learn\.microsoft\.com/_sitemaps/"
-            r"(microsoft-copilot-studio|troubleshoot)_en-us_\d+\.xml",
+            r"(power-apps|troubleshoot)_en-us_\d+\.xml",
             node.text,
         )
     ]
-    if not any("/microsoft-copilot-studio_" in url for url in maps) or not any(
+    if not any("/power-apps_" in url for url in maps) or not any(
         "/troubleshoot_" in url for url in maps
     ):
         raise RuntimeError("Both official sitemap groups are required; discovery is incomplete.")
@@ -204,24 +211,43 @@ def parse_article(url: str, html: str, lastmod: str) -> Article:
         raise ValueError(f"Unexpectedly empty body: {url}")
     modified = soup.find("meta", attrs={"name": "updated_at"})
     source = soup.find("meta", attrs={"name": "original_content_git_url"})
+    subservice = soup.find("meta", attrs={"name": "ms.subservice"})
     return Article(
         url=url,
         title=title,
         text=text,
         modified=str(modified.get("content", "")) if modified else lastmod,
         source_path=str(source.get("content", "")) if source else "",
+        subservice=str(subservice.get("content", "")) if subservice else "",
     )
 
 
-def fetch_article(item: tuple[str, str]) -> Article:
+def fetch_article(item: tuple[str, str]) -> Article | None:
     url, lastmod = item
     response = get(url)
+    redirected = urlsplit(response.url)
+    if (
+        redirected.scheme == "https"
+        and redirected.netloc.lower() == "learn.microsoft.com"
+        and any(
+            redirected.path == root.rstrip("/")
+            or redirected.path.startswith(root)
+            for root in (urlsplit(value).path for value in ROOTS)
+        )
+        and EXCLUDED_TOPICS.search(unquote(redirected.path))
+    ):
+        LOG.info("Skipping excluded topic redirect: %s -> %s", url, response.url)
+        return None
     target = canonical_url(response.url, url)
     if target is None:
         raise ValueError(
             f"Article redirected outside monitored directories: {url} -> {response.url}"
         )
-    return parse_article(url, response.text, lastmod)
+    article = parse_article(url, response.text, lastmod)
+    if EXCLUDED_TOPICS.search(f"{article.title} {article.subservice}"):
+        LOG.info("Skipping excluded article topic: %s", url)
+        return None
+    return article
 
 
 def date_value(value: str) -> datetime | None:
@@ -234,8 +260,8 @@ def date_value(value: str) -> datetime | None:
 def source_location(article: Article) -> tuple[str, str] | None:
     parsed = urlsplit(article.source_path)
     match = re.fullmatch(
-        r"/MicrosoftDocs/(businessapps-copilot-docs(?:-pr)?|copilot-studio-docs(?:-pr)?|"
-        r"power-virtual-agents(?:-pr)?|SupportArticles-docs(?:-pr)?)/blob/[^/]+/(.+)",
+        r"/MicrosoftDocs/(powerapps-docs(?:-pr)?|SupportArticles-docs(?:-pr)?)"
+        r"/blob/[^/]+/(.+)",
         parsed.path,
         re.IGNORECASE,
     )
@@ -348,7 +374,9 @@ def scan(
     cutoff = now - timedelta(days=days)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         articles = {
-            article.url: article for article in pool.map(fetch_article, sorted(inventory.items()))
+            article.url: article
+            for article in pool.map(fetch_article, sorted(inventory.items()))
+            if article is not None
         }
     changes = []
     for article in articles.values():
@@ -393,8 +421,8 @@ def run(args: argparse.Namespace) -> None:
             sort_keys=True,
         ).encode()
     ).hexdigest()[:16]
-    tag = f"copilot-studio-docs-{digest}"
-    pdf = args.output / f"copilot-studio-updates-{now:%Y-%m-%d}-{args.days}d-{digest}.pdf"
+    tag = f"power-apps-docs-{digest}"
+    pdf = args.output / f"power-apps-updates-{now:%Y-%m-%d}-{args.days}d-{digest}.pdf"
     generate_pdf(
         changes, pdf, now=now, since=since, articles=articles, partial=bool(args.limit)
     )
@@ -411,7 +439,7 @@ def run(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Copilot Studio documentation summary reports.")
+    parser = argparse.ArgumentParser(description="Power Apps documentation summary reports.")
     parser.add_argument(
         "--days", type=int, default=7, help="Look back this many days (default: 7)."
     )

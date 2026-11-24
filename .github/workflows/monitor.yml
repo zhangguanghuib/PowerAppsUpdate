@@ -1,4 +1,4 @@
-name: Copilot Studio documentation monitor
+name: Power Apps documentation monitor
 
 on:
   schedule:
@@ -15,7 +15,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: copilot-studio-documentation-monitor
+  group: power-apps-documentation-monitor
   cancel-in-progress: false
 
 jobs:
@@ -54,7 +54,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -- "$PDF"
-          git commit -m "Archive Copilot Studio documentation digest [skip ci]" \
+          git commit -m "Archive Power Apps documentation digest [skip ci]" \
             -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
           git pull --rebase origin "$GITHUB_REF_NAME"
           git push origin "HEAD:refs/heads/$GITHUB_REF_NAME"
@@ -68,7 +68,7 @@ jobs:
           set -euo pipefail
           if ! gh release view "$TAG" > /dev/null 2>&1; then
             gh release create "$TAG" --target "$(git rev-parse HEAD)" \
-              --title "Copilot Studio documentation: $COUNT documents" \
+              --title "Power Apps documentation: $COUNT documents" \
               --notes "Links and short evidence-based summaries for the requested window. Modification dates are not feature releases. See the PDF for history limitations."
           fi
           gh release upload "$TAG" "$PDF" --clobber

@@ -6,7 +6,7 @@ from pypdf import PdfReader
 from monitor import Article, Change
 from report import changed_blocks, excerpt, generate_pdf, summarize
 
-URL = "https://learn.microsoft.com/en-us/microsoft-copilot-studio/test"
+URL = "https://learn.microsoft.com/en-us/power-apps/test"
 
 
 def test_full_diff_no_truncation() -> None:
@@ -79,7 +79,8 @@ def test_pdf_is_concise_with_urls_summaries_and_pagination(tmp_path: Path) -> No
     normalized_text = " ".join(text.split())
     assert 2 < len(pdf.pages) < 18
     for value in [
-        "Old documentation", "New setting enabled.", "CC BY 4.0", "MICROSOFT COPILOT STUDIO",
+        "Old documentation", "New setting enabled.", "CC BY 4.0", "MICROSOFT POWER APPS",
+        "excluding model-driven apps and Dataverse topics",
         "not necessarily new product features", "2026-11-03", "2026-11-08", URL + "/17",
     ]:
         assert value in normalized_text

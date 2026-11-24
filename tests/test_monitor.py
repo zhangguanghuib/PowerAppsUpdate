@@ -18,17 +18,17 @@ HTML = """
 <html><head>
 <meta name="updated_at" content="2026-10-25T01:00:00Z">
 <meta name="original_content_git_url"
- content="https://github.com/MicrosoftDocs/businessapps-copilot-docs-pr/blob/live/copilot-studio/a.md">
+ content="https://github.com/MicrosoftDocs/powerapps-docs-pr/blob/live/powerapps-docs/a.md">
 </head><body><main>
 <div id="article-header">Share and edit this page</div>
 <div class="content"><h1>Example article</h1></div>
 <div id="article-metadata">Contributor count 99</div>
-<div class="content"><p>Body explaining a detailed Copilot Studio feature.</p>
+<div class="content"><p>Body explaining a detailed Power Apps feature.</p>
 <a href="other">Related content</a><img src="media/example.png" alt="Example diagram">
 <pre><code>if True:
     print("hello")
 </code></pre>
-<p class="nextstepaction">Next: publish your agent</p>
+<p class="nextstepaction">Next: publish your app</p>
 </div><footer class="content-footer">Feedback changes daily</footer>
 </main></body></html>
 """
@@ -48,10 +48,10 @@ def test_actual_learn_sibling_content_containers() -> None:
     assert monitor.ROOTS[0] + "other" in parsed.text
     assert "media/example.png" in parsed.text
     assert '    print("hello")' in parsed.text
-    assert "Next: publish your agent" in parsed.text
+    assert "Next: publish your app" in parsed.text
     assert monitor.source_location(parsed) == (
-        "MicrosoftDocs/businessapps-copilot-docs",
-        "copilot-studio/a.md",
+        "MicrosoftDocs/powerapps-docs",
+        "powerapps-docs/a.md",
     )
 
 
@@ -103,11 +103,11 @@ def test_code_indentation_change_is_observed() -> None:
 
 def test_inline_markup_does_not_split_paragraphs() -> None:
     html = HTML.replace(
-        "Body explaining a detailed Copilot Studio feature.",
-        "Body explaining a <strong>detailed</strong> Copilot Studio\n feature.",
+        "Body explaining a detailed Power Apps feature.",
+        "Body explaining a <strong>detailed</strong> Power Apps\n feature.",
     )
     parsed = parse_article(URL, html, "")
-    assert "Body explaining a detailed Copilot Studio feature." in parsed.text
+    assert "Body explaining a detailed Power Apps feature." in parsed.text
 
 
 def test_utf8_is_not_decoded_as_latin1(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -138,6 +138,9 @@ def test_template_metadata_and_timestamp_do_not_change_article_text() -> None:
         "https://learn.microsoft.com/en-us/microsoft-copilot-studio-elsewhere/test",
         "https://learn.microsoft.com/zh-cn/microsoft-copilot-studio/test",
         "https://learn.microsoft.com/en-us/troubleshoot/power-platform/copilot-studio-other/test",
+        "https://learn.microsoft.com/en-us/power-apps-elsewhere/test",
+        "https://learn.microsoft.com/zh-cn/power-apps/test",
+        "https://learn.microsoft.com/en-us/troubleshoot/power-platform/power-apps-other/test",
     ],
 )
 def test_inventory_stays_in_scope(value: str) -> None:
@@ -147,6 +150,93 @@ def test_inventory_stays_in_scope(value: str) -> None:
 def test_canonicalization() -> None:
     assert canonical_url(URL + "?view=dataverse-latest#fragment", URL) == URL
     assert canonical_url(monitor.ROOTS[0], URL) == monitor.ROOTS[0].rstrip("/")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "maker/model-driven-apps",
+        "maker/model-driven-apps/create-app",
+        "developer/model-driven-apps/clientapi/reference",
+        "maker/data-platform/create-table",
+        "developer/data-platform/webapi/overview",
+        "teams/overview-data-platform",
+        "teams/dataverse-for-teams-table-permissions",
+        "maker/canvas-apps/connections/connection-common-data-service",
+        "mobile/use-custom-model-driven-app-on-mobile",
+        "maker/%64ata-platform/create-table",
+    ],
+)
+def test_excluded_topic_urls(path: str) -> None:
+    assert canonical_url(monitor.ROOTS[0] + path, URL) is None
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        monitor.ROOTS[0] + "maker/canvas-apps/create-app",
+        monitor.ROOTS[0] + "developer/code-apps/overview",
+        monitor.ROOTS[0] + "developer/component-framework/overview",
+        monitor.ROOTS[1] + "connections/troubleshoot-http-0-responses",
+    ],
+)
+def test_relevant_power_apps_urls_remain_in_scope(url: str) -> None:
+    assert canonical_url(url, URL) == url
+
+
+@pytest.mark.parametrize(
+    ("title", "subservice", "excluded"),
+    [
+        ("Sorting fails in a model-driven app", "", True),
+        ("Create a table in Microsoft Dataverse", "", True),
+        ("Use the Common Data Service", "", True),
+        ("Table access troubleshooting", "dataverse-developer", True),
+        ("Troubleshoot a grid", "model-driven-apps", True),
+        ("Create a canvas app", "canvas-maker", False),
+        ("Power Apps component framework overview", "pcf", False),
+    ],
+)
+def test_fetch_filters_article_topics_not_incidental_body_mentions(
+    monkeypatch: pytest.MonkeyPatch, title: str, subservice: str, excluded: bool
+) -> None:
+    html = HTML.replace("Example article", title).replace(
+        "</head>", f'<meta name="ms.subservice" content="{subservice}"></head>'
+    ).replace("Power Apps feature.", "Power Apps feature that can connect to Dataverse.")
+    monkeypatch.setattr(monitor, "get", lambda url: Mock(url=url, text=html))
+    result = monitor.fetch_article((URL, ""))
+    assert (result is None) is excluded
+    if result is not None:
+        assert result.subservice == subservice
+
+
+@pytest.mark.parametrize(
+    ("target", "excluded"),
+    [
+        (monitor.ROOTS[0] + "maker/data-platform/overview", True),
+        (monitor.ROOTS[1] + "model-driven-apps/test", True),
+        ("https://example.com/dataverse/test", False),
+        ("https://learn.microsoft.com/en-us/power-platform/dataverse/test", False),
+    ],
+)
+def test_excluded_redirects_are_skipped_but_out_of_scope_redirects_fail(
+    monkeypatch: pytest.MonkeyPatch, target: str, excluded: bool
+) -> None:
+    monkeypatch.setattr(monitor, "get", lambda url: Mock(url=target, text=HTML))
+    if excluded:
+        assert monitor.fetch_article((URL, "")) is None
+    else:
+        with pytest.raises(ValueError, match="outside monitored directories"):
+            monitor.fetch_article((URL, ""))
+
+
+def test_scan_omits_excluded_articles(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(monitor, "fetch_article", lambda item: None)
+    history = Mock()
+    monkeypatch.setattr(monitor, "historical_change", history)
+    changes, articles = monitor.scan({URL: ""}, now=NOW)
+    assert changes == []
+    assert articles == {}
+    history.assert_not_called()
 
 
 @pytest.mark.parametrize("days", [1, 7, 30, 365])
@@ -223,11 +313,19 @@ def test_historical_rate_limit_not_silently_ignored(monkeypatch: pytest.MonkeyPa
 
 def test_discovery_uses_both_sitemap_groups(monkeypatch: pytest.MonkeyPatch) -> None:
     index = """<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-    <sitemap><loc>https://learn.microsoft.com/_sitemaps/microsoft-copilot-studio_en-us_1.xml</loc></sitemap>
+    <sitemap><loc>https://learn.microsoft.com/_sitemaps/power-apps_en-us_1.xml</loc></sitemap>
     <sitemap><loc>https://learn.microsoft.com/_sitemaps/troubleshoot_en-us_1.xml</loc></sitemap>
-    <sitemap><loc>https://learn.microsoft.com/_sitemaps/microsoft-copilot-studio_zh-cn_1.xml</loc></sitemap>
+    <sitemap><loc>https://learn.microsoft.com/_sitemaps/power-apps_zh-cn_1.xml</loc></sitemap>
+    <sitemap><loc>https://learn.microsoft.com/_sitemaps/microsoft-copilot-studio_en-us_1.xml</loc></sitemap>
     </sitemapindex>"""
-    urls = [URL, monitor.ROOTS[1] + "test", "https://learn.microsoft.com/en-us/windows/test"]
+    urls = [
+        URL,
+        monitor.ROOTS[1] + "test",
+        "https://learn.microsoft.com/en-us/windows/test",
+        monitor.ROOTS[0] + "maker/model-driven-apps/test",
+        monitor.ROOTS[0] + "developer/data-platform/test",
+        monitor.ROOTS[1] + "dataverse/test",
+    ]
     sitemap = (
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
         + "".join(f"<url><loc>{url}</loc><lastmod>2026-11-01</lastmod></url>" for url in urls)
@@ -242,9 +340,7 @@ def test_discovery_uses_both_sitemap_groups(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(monitor, "get", fake_get)
     inventory = monitor.discover()
     assert len(calls) == 3
-    assert urls[0] in inventory
-    assert urls[1] in inventory
-    assert urls[2] not in inventory
+    assert inventory == dict.fromkeys(urls[:2], "2026-11-01")
     assert monitor.ROOTS[1].rstrip("/") not in inventory
 
 
@@ -273,6 +369,8 @@ def test_repeated_runs_recompute_requested_window(
     assert manifest["days"] == 7
     assert manifest["scanned"] == 1
     assert not manifest["partial"]
+    assert Path(manifest["pdf"]).name.startswith("power-apps-updates-")
+    assert manifest["tag"].startswith("power-apps-docs-")
     args.output = tmp_path / "second"
     monitor.run(args)
     second_manifest = json.loads((args.output / "manifest.json").read_text())

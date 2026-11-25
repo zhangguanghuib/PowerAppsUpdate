@@ -56,6 +56,35 @@ are retained for 30 days; committed PDFs and Release assets do not expire
 automatically. If Release upload fails after the PDF commit, the PDF remains
 available in the repository and the workflow fails visibly.
 
+## Latest reports for OneDrive synchronization
+
+Each workflow commits [output/latest.json](output/latest.json) together with its PDF.
+This JSON array contains the newest Power Apps report and newest Power Automate
+report separately, with `product`, `name`, `path`, `created_at`, `size`, `type`,
+and `download_url` fields. Selection uses recorded creation time, not filename
+sorting, checkout file timestamps, or a fixed exclusion list.
+
+For existing reports, creation time is the earliest recorded Git addition time.
+New reports record their generation time before being committed; later updates
+or regeneration of the same filename do not reset that time. Complete Git history
+is required, so both workflows use `fetch-depth: 0`. Timestamp ties are resolved
+deterministically by filename. The index is rebuilt from the current PDF folder;
+missing history or missing product reports fail explicitly.
+
+The OneDrive flow polls this index every five minutes and processes only these
+two latest reports. It preserves `/CopilotStudioWhatIsNew` as the destination,
+skips existing equal-size files, and verifies downloaded sizes. It does not backfill
+intermediate reports when several are generated between checks.
+
+The flow reads the GitHub Contents API for `output/latest.json` and decodes its
+`content` with `json(base64ToString(body('List_latest_reports')?['content']))`.
+GitHub folder listings themselves do not provide file creation times. To rebuild
+the index manually from complete Git history:
+
+```powershell
+uv run python latest_reports.py --repository zhangguanghuib/PowerAppsUpdate --branch main
+```
+
 ## Selection and summary accuracy
 
 - Discover the complete current inventory from both official sitemap groups,

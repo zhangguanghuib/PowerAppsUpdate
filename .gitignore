@@ -3,6 +3,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 output/*
+!output/latest.json
 !output/pdf/
 output/pdf/*
 !output/pdf/copilot-studio-updates-*.pdf

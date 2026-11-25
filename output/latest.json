@@ -1,0 +1,20 @@
+[
+  {
+    "product": "power-apps",
+    "type": "file",
+    "name": "power-apps-updates-2026-11-24-10d-449b3117a5c3a394.pdf",
+    "path": "output/pdf/power-apps-updates-2026-11-24-10d-449b3117a5c3a394.pdf",
+    "created_at": "2026-11-24T15:33:36.000000Z",
+    "size": 38258,
+    "download_url": "https://raw.githubusercontent.com/zhangguanghuib/PowerAppsUpdate/main/output/pdf/power-apps-updates-2026-11-24-10d-449b3117a5c3a394.pdf"
+  },
+  {
+    "product": "power-automate",
+    "type": "file",
+    "name": "power-automate-updates-2026-11-24-7d-4905c11f451d7b46.pdf",
+    "path": "output/pdf/power-automate-updates-2026-11-24-7d-4905c11f451d7b46.pdf",
+    "created_at": "2026-11-24T15:47:13.000000Z",
+    "size": 44077,
+    "download_url": "https://raw.githubusercontent.com/zhangguanghuib/PowerAppsUpdate/main/output/pdf/power-automate-updates-2026-11-24-7d-4905c11f451d7b46.pdf"
+  }
+]

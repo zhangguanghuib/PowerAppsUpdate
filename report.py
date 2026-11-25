@@ -89,33 +89,148 @@ def excerpt(text: str, *, limit: int = 320) -> str:
     return text
 
 
+def document_blocks(text: str) -> list[tuple[str, str]]:
+    blocks: list[tuple[str, str]] = []
+    headings: list[tuple[int, str]] = []
+    lines: list[str] = []
+    code_fence = ""
+
+    def flush() -> None:
+        value = "\n".join(lines) if code_fence else " ".join(lines)
+        if value.strip():
+            section = " > ".join(title for _, title in headings) or "Document body"
+            blocks.append((section, f"Code:\n{value}" if code_fence else value))
+        lines.clear()
+
+    for raw in text.splitlines():
+        fence = re.match(r"^\s*(`{3,}|~{3,})", raw)
+        if code_fence:
+            if fence and fence[1][0] == code_fence[0] and len(fence[1]) >= len(code_fence):
+                flush()
+                code_fence = ""
+            else:
+                lines.append(raw)
+            continue
+        if fence:
+            flush()
+            code_fence = fence[1]
+            continue
+        line = re.sub(r"^(?:>\s*)+", "", raw.strip())
+        if not line:
+            flush()
+            continue
+        note = re.match(r"^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(.*)", line, re.IGNORECASE)
+        if note:
+            line = f"{note[1].capitalize()}: {note[2]}".rstrip()
+        elif line.startswith(("[!", ":::")):
+            flush()
+            continue
+        line = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", line)
+        line = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", line)
+        line = re.sub(r"(\*\*|__|`)(.+?)\1", r"\2", line)
+        line = re.sub(r"\s+", " ", line).strip()
+        heading = re.match(r"^(#{1,6})\s+(.+?)(?:\s+#+)?$", line)
+        if heading:
+            flush()
+            level, title = len(heading[1]), heading[2]
+            while headings and headings[-1][0] >= level:
+                headings.pop()
+            section = " > ".join(title for _, title in headings) or "Document body"
+            blocks.append((section, f"Heading: {title}"))
+            headings.append((level, title))
+        else:
+            if re.match(r"^(?:[-*+]|\d+[.)])\s+|^\|", line):
+                flush()
+            lines.append(line)
+            if line.startswith("|"):
+                flush()
+    flush()
+    return blocks
+
+
+def comparison_excerpt(text: str, other: str, *, limit: int = 320) -> str:
+    if len(text) <= limit:
+        return text
+    position = next((
+        start
+        for kind, _, _, start, _ in SequenceMatcher(None, other, text, autojunk=False).get_opcodes()
+        if kind != "equal"
+    ), 0)
+    start = max(0, position - limit // 3)
+    if start:
+        boundary = text.find(" ", start, position)
+        if boundary >= 0:
+            start = boundary + 1
+    end = min(start + limit, len(text))
+    if end < len(text):
+        boundary = text.rfind(" ", max(start, position), end)
+        if boundary > start:
+            end = boundary
+    return ("..." if start else "") + text[start:end].rstrip() + (
+        "..." if end < len(text) else ""
+    )
+
+
 def summarize(change: Change) -> str:
     if change.kind != "Historical source comparison":
-        overview = excerpt("\n".join(change.after.splitlines()[1:])) or excerpt(change.after)
+        lines = change.after.splitlines()
+        if lines and lines[0].lstrip("# ").strip() == change.title:
+            lines = lines[1:]
+        overview = excerpt("\n".join(lines)) or excerpt(change.after)
         if change.kind == "New source document":
             return (
-                "Current article overview (new public source file; publication date unverified): "
+                "Document summary (extractive; new public source file; "
+                "publication date unverified): "
                 f"{overview or 'See the linked article.'}"
             )
         return (
             "Current article overview (not a change claim; history unavailable or disabled): "
             f"{overview or 'See the linked article.'}"
         )
-    blocks = changed_blocks(change.before, change.after)
-    if not blocks:
+    if change.before == change.after:
         return (
             "The modification timestamp is in range, but no public source-body changes were "
             "found. The update may be metadata-only or differ from public source publication."
         )
-    added = "\n".join(after for _, _, after in blocks if after)
-    removed = "\n".join(before for _, before, _ in blocks if before)
-    parts = [f"Public source comparison: {len(blocks)} changed block(s)."]
-    if added:
-        parts.append(f"Added/updated excerpt: {excerpt(added) or 'Non-prose source changes.'}")
-    if removed:
-        parts.append(f"Removed/replaced excerpt: {excerpt(removed) or 'Non-prose source changes.'}")
-    parts.append("Representative excerpts only; source changes may differ from the live page.")
-    return " ".join(parts)
+    old, new = document_blocks(change.before), document_blocks(change.after)
+    blocks = [
+        (kind, old[i:j], new[start:end])
+        for kind, i, j, start, end in SequenceMatcher(
+            None, [text for _, text in old], [text for _, text in new], autojunk=False
+        ).get_opcodes()
+        if kind != "equal"
+    ]
+    if not blocks:
+        return (
+            "No readable-text differences after normalizing paragraph wrapping and common "
+            "inline Markdown formatting. Formatting or non-text source content may have changed; "
+            "no product behavior change is inferred."
+        )
+    parts = ["Updated document - before / after (extractive)."]
+    if len(blocks) > 3:
+        parts.append(f"Showing 3 of {len(blocks)} changed passages; additional passages omitted.")
+    labels = {"insert": "Added content", "delete": "Removed content", "replace": "Revised content"}
+    for index, (kind, before_blocks, after_blocks) in enumerate(blocks[:3], 1):
+        sections = list(dict.fromkeys(section for section, _ in before_blocks + after_blocks))
+        before = "\n".join(text for _, text in before_blocks)
+        after = "\n".join(text for _, text in after_blocks)
+        parts.extend([
+            f"{index}. {labels[kind]}",
+            f"Section: {'; '.join(sections)}",
+            "Before: " + (
+                comparison_excerpt(before, after)
+                if before else "No corresponding passage in the compared earlier source."
+            ),
+            "After: " + (
+                comparison_excerpt(after, before)
+                if after else "Passage removed from the compared current source."
+            ),
+        ])
+    parts.append(
+        "Paired source excerpts, not an interpretation of user impact or proof of a product "
+        "behavior change; source changes may differ from the live page."
+    )
+    return "\n".join(parts)
 
 
 def generate_pdf(
@@ -153,11 +268,11 @@ def generate_pdf(
     story: list[Flowable] = []
 
     def paragraph(text: str, style: ParagraphStyle = body) -> None:
-        value = escape(safe_text(text.expandtabs(4), font)).replace("\n", "<br/>")
-        indent = len(value) - len(value.lstrip(" "))
-        if indent:
-            value = "&#160;" * indent + value[indent:]
-        story.append(Paragraph(value, style))
+        lines = []
+        for line in safe_text(text.expandtabs(4), font).split("\n"):
+            indent = len(line) - len(line.lstrip(" "))
+            lines.append("&#160;" * indent + escape(line[indent:]))
+        story.append(Paragraph("<br/>".join(lines), style))
 
     paragraph(f"MICROSOFT {product.name.upper()}", styles["Title"])
     paragraph("Documentation update digest", styles["Heading1"])
@@ -180,8 +295,11 @@ def generate_pdf(
         "updated documents second, and unclassified documents last. A source-file addition "
         "does not prove a new website publication; repository imports or copies may look new. "
         "Unavailable history is not treated as proof of creation. "
-        "Summaries use representative public source changes "
-        "since the window start, not AI interpretation. If history is unavailable, an overview "
+        "Each updated document shows paired Before / After passages with section labels, using "
+        "public source versions spanning the window start. Up to three changed passages are "
+        "shown per document, with excerpts focused near the first differing text. "
+        "New documents receive an extractive summary, not a Before / After comparison. "
+        "No user-impact interpretation is inferred. If history is unavailable, an overview "
         "of the current article is explicitly labeled instead of claiming unverified changes."
     )
     paragraph(

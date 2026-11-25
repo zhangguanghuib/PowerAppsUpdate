@@ -107,9 +107,22 @@ uv run python latest_reports.py --repository zhangguanghuib/PowerAppsUpdate --br
   remain explicitly unclassified rather than being guessed as new or updated.
 - When public GitHub source history is accessible, compare the last source
   version before the window start against the latest version at/before the
-  run time. Summaries contain the number of changed blocks and short
-  representative added/updated and removed/replaced excerpts, not an AI-written
-  interpretation or full article reproduction.
+  run time. Updated documents show **Before / After** excerpts together for each
+  changed passage, labeled **Added content**, **Removed content**, or **Revised
+  content**, with the section heading for context. Added/removed passages are
+  described as documentation additions/removals, not newly available/removed
+  product capabilities.
+- Comparisons normalize paragraph soft wrapping and common inline Markdown
+  formatting, while retaining code indentation and link targets. Each updated
+  document shows up to three changed passages in source order; omitted passages
+  are explicitly counted. Each side is limited to approximately 320 characters,
+  focused near its first differing text so a long unchanged introduction does
+  not hide the edit. These remain representative extracts, not exhaustive
+  changes, AI interpretations, or inferred statements of user impact.
+- Newly created documents receive a short **Document summary** extracted from
+  their current content, without Before / After labels or a claim that the
+  documented feature itself is new. No model API, API key, or AI inference
+  charges are introduced.
 - If source history or a baseline is unavailable, clearly label a short current
   article overview instead. **That overview is not a claim about what changed.**
   Metadata-only changes can yield no source-body differences and are labeled.

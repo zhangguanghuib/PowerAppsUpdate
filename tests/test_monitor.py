@@ -216,10 +216,13 @@ def test_fetch_filters_article_topics_not_incidental_body_mentions(
         (monitor.ROOTS[0] + "maker/data-platform/overview", True),
         (monitor.ROOTS[1] + "model-driven-apps/test", True),
         ("https://example.com/dataverse/test", False),
-        ("https://learn.microsoft.com/en-us/power-platform/dataverse/test", False),
+        ("http://learn.microsoft.com/en-us/power-apps/test", False),
+        ("https://learn.microsoft.com.example.com/en-us/power-apps/test", False),
+        ("https://learn.microsoft.com/en-us/power-platform/dataverse/test", True),
+        ("https://learn.microsoft.com/en-us/power-platform/important-changes-coming", True),
     ],
 )
-def test_excluded_redirects_are_skipped_but_out_of_scope_redirects_fail(
+def test_out_of_scope_learn_redirects_are_skipped_but_external_redirects_fail(
     monkeypatch: pytest.MonkeyPatch, target: str, excluded: bool
 ) -> None:
     monkeypatch.setattr(monitor, "get", lambda url: Mock(url=target, text=HTML))
@@ -228,6 +231,32 @@ def test_excluded_redirects_are_skipped_but_out_of_scope_redirects_fail(
     else:
         with pytest.raises(ValueError, match="outside monitored directories"):
             monitor.fetch_article((URL, ""))
+
+
+@pytest.mark.parametrize("product", [POWER_APPS, POWER_AUTOMATE])
+def test_scan_continues_after_moved_learn_article_without_including_destination(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    product: Product,
+) -> None:
+    moved = product.roots[0] + "moved-article"
+    active = product.roots[0] + "active-article"
+    destination = "https://learn.microsoft.com/en-us/power-platform/important-changes-coming"
+    html = HTML.replace("2026-10-25T01:00:00Z", NOW.isoformat())
+    monkeypatch.setattr(
+        monitor, "get",
+        lambda url: Mock(url=destination, text="Not an in-scope article")
+        if url == moved else Mock(url=url, text=html),
+    )
+    changes, articles = monitor.scan(
+        dict.fromkeys([moved, active], ""), now=NOW, history=False, product=product,
+    )
+    assert list(articles) == [active]
+    assert [change.url for change in changes] == [active]
+    assert "WARNING" in caplog.text
+    assert "Skipping out-of-scope Microsoft Learn redirect" in caplog.text
+    assert moved in caplog.text
+    assert destination in caplog.text
 
 
 def test_scan_omits_excluded_articles(monkeypatch: pytest.MonkeyPatch) -> None:

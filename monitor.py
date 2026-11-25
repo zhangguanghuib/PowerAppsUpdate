@@ -240,6 +240,11 @@ def fetch_article(
         return None
     target = canonical_url(response.url, url, product=product)
     if target is None:
+        if redirected.scheme == "https" and redirected.netloc.lower() == "learn.microsoft.com":
+            LOG.warning(
+                "Skipping out-of-scope Microsoft Learn redirect: %s -> %s", url, response.url
+            )
+            return None
         raise ValueError(
             f"Article redirected outside monitored directories: {url} -> {response.url}"
         )

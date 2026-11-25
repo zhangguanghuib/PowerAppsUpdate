@@ -92,6 +92,13 @@ uv run python latest_reports.py --repository zhangguanghuib/PowerAppsUpdate --br
   the inclusive UTC interval `[run time - days, run time]`. Use sitemap `lastmod`
   only if `updated_at` is absent. Missing/invalid dates fail the run rather than
   silently skipping articles. Future timestamps are excluded.
+- Sitemap entries can remain after an article moves. If an entry redirects to
+  an HTTPS Microsoft Learn page outside the selected product's monitored roots,
+  log a warning with both URLs and skip it without aborting the scan. The
+  destination is not included under the original article's URL. Excluded
+  Power Apps topic redirects are also skipped. Redirects to other hosts or
+  non-HTTPS destinations, HTTP failures, and article parsing errors still fail
+  the run; monitoring scope is not broadened to follow moved pages.
 - Every run recomputes its requested window; previous scans do not suppress
   articles. Only the selected product's scope above is monitored; no persistent scan baseline
   is needed.

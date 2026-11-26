@@ -2,18 +2,18 @@
   {
     "product": "power-apps",
     "type": "file",
-    "name": "power-apps-updates-2026-11-25-7d-35023fe91e6cbd00.pdf",
-    "path": "output/pdf/power-apps-updates-2026-11-25-7d-35023fe91e6cbd00.pdf",
-    "created_at": "2026-11-25T09:40:30.000000Z",
-    "size": 51888,
-    "download_url": "https://raw.githubusercontent.com/zhangguanghuib/PowerAppsUpdate/main/output/pdf/power-apps-updates-2026-11-25-7d-35023fe91e6cbd00.pdf"
+    "name": "power-apps-updates-2026-11-26-7d-e44d7f2e249935a4.pdf",
+    "path": "output/pdf/power-apps-updates-2026-11-26-7d-e44d7f2e249935a4.pdf",
+    "created_at": "2026-11-26T09:15:19.561196Z",
+    "size": 50996,
+    "download_url": "https://raw.githubusercontent.com/zhangguanghuib/PowerAppsUpdate/main/output/pdf/power-apps-updates-2026-11-26-7d-e44d7f2e249935a4.pdf"
   },
   {
     "product": "power-automate",
     "type": "file",
     "name": "power-automate-updates-2026-11-26-7d-89b2cb1d6576d9eb.pdf",
     "path": "output/pdf/power-automate-updates-2026-11-26-7d-89b2cb1d6576d9eb.pdf",
-    "created_at": "2026-11-26T09:07:20.369156Z",
+    "created_at": "2026-11-26T09:07:20.000000Z",
     "size": 90592,
     "download_url": "https://raw.githubusercontent.com/zhangguanghuib/PowerAppsUpdate/main/output/pdf/power-automate-updates-2026-11-26-7d-89b2cb1d6576d9eb.pdf"
   }
